@@ -1,7 +1,7 @@
 import streamlit as st, pandas as pd, plotly.express as px
 from utils import read_csv_smart, derive_common_fields
 
-st.title("📈 Série Temporal de Internações e Óbitos")
+st.title("Série Temporal de Internações e Óbitos")
 
 pac_file = st.sidebar.file_uploader("Base de internações (CSV)", type=["csv"], key="st1")
 if not pac_file:
