@@ -8,8 +8,7 @@ from utils import read_csv_smart, derive_common_fields, percent
 st.set_page_config(page_title="Painel de Indicadores de Saúde", page_icon="🩺", layout="wide")
 
 st.markdown("""
-# 🩺 Painel de Indicadores de Saúde – Perfil dos Pacientes
-Este painel é um *template moderno* baseado no seu dashboard. Carregue seus CSVs na barra lateral para ver as visualizações.
+# Painel de Indicadores Cardiovasculares – Perfil dos Pacientes
 """)
 
 with st.sidebar:
@@ -41,7 +40,7 @@ dfs = load_data(pacientes_file, procedimentos_file, uti_file)
 pac, proc, uti = dfs["pac"], dfs["proc"], dfs["uti"]
 
 if pac.empty:
-    st.info("⬅️ Carregue ao menos a base de internações para começar.")
+    st.info("Carregue ao menos a base de internações para começar.")
     st.stop()
 
 # ----- Filters -----
@@ -69,10 +68,10 @@ internacoes = len(df)
 estabs = df["UNIDADE_ADMISSAO"].nunique() if "UNIDADE_ADMISSAO" in df.columns else None
 proceds = len(proc) if not proc.empty else None
 
-col1.metric("👥 Pacientes únicos", f"{total_pac:,}".replace(",", "."))
-col2.metric("🛏️ Internações", f"{internacoes:,}".replace(",", "."))
-col3.metric("🏥 Estabelecimentos", estabs if estabs is not None else "—")
-col4.metric("🧰 Procedimentos", proceds if proceds is not None else "—")
+col1.metric("Pacientes únicos", f"{total_pac:,}".replace(",", "."))
+col2.metric("Internações", f"{internacoes:,}".replace(",", "."))
+col3.metric("Estabelecimentos", estabs if estabs is not None else "—")
+col4.metric("Procedimentos", proceds if proceds is not None else "—")
 
 # ----- Row: Sexo & Caráter -----
 c1, c2, c3 = st.columns([1,1,1])
@@ -115,7 +114,7 @@ with c4:
 with c5:
     if "DATA_OBITO" in df.columns:
         mort = df["DATA_OBITO"].notna().mean()*100
-        st.metric("⚰️ Mortalidade hospitalar (%)", f"{mort:.2f}%")
+        st.metric(" Mortalidade hospitalar (%)", f"{mort:.2f}%")
 with c6:
     if "LOS_UTI_dias" in df.columns:
         fig = px.histogram(df.dropna(subset=["LOS_UTI_dias"]), x="LOS_UTI_dias", nbins=30, title="Tempo de UTI (dias)")
