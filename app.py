@@ -12,7 +12,7 @@ st.markdown("""
 """)
 
 with st.sidebar:
-    st.header("⚙️ Configurações")
+    st.header("Configurações")
     pacientes_file = st.file_uploader("Base principal de internações (CSV)", type=["csv"])
     procedimentos_file = st.file_uploader("Procedimentos (CSV)", type=["csv"])
     uti_file = st.file_uploader("UTI / CTI (CSV)", type=["csv"])
