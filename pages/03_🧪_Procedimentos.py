@@ -1,7 +1,7 @@
 import streamlit as st, pandas as pd, plotly.express as px
 from utils import read_csv_smart
 
-st.title("🧪 Procedimentos – Ranking e Séries")
+st.title("Procedimentos – Ranking e Séries")
 
 proc_file = st.sidebar.file_uploader("Base de Procedimentos (CSV)", type=["csv"], key="proc1")
 if not proc_file:
