@@ -1,4 +1,4 @@
-# 🩺 Painel de Indicadores de Saúde – Streamlit
+#Painel de Indicadores Cardiovasculares
 
 **Como usar**
 
