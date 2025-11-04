@@ -1,83 +1,108 @@
-# app.py — Perfil dos Pacientes (2019–2025)
-# Requisitos: streamlit, pandas, numpy, plotly, python-dateutil
+# app.py — Perfil dos Pacientes (2019–2025) | suporta Parquet único OU 3 CSVs grandes (DuckDB)
+# Requisitos: streamlit, pandas, numpy, plotly, python-dateutil, pyarrow, duckdb
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime
 from dateutil import parser
+from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
+import duckdb, os, tempfile
 
-# --------- Config ---------
 st.set_page_config(page_title="Perfil dos Pacientes – ACC", layout="wide")
 
-# --------- Helpers ---------
-DATE_COLS = ["data_internacao","data_alta","data_obito","dthr_valida"]
-
+# -------------------- utilidades --------------------
 def _to_dt(s):
     if pd.isna(s): return pd.NaT
     if isinstance(s, (pd.Timestamp, datetime)): return pd.to_datetime(s)
-    try:
-        return pd.to_datetime(parser.parse(str(s), dayfirst=True, yearfirst=False, fuzzy=True))
-    except Exception:
-        return pd.NaT
+    try: return pd.to_datetime(parser.parse(str(s), dayfirst=True, fuzzy=True))
+    except: return pd.NaT
 
-@st.cache_data(show_spinner=False)
-def load_data(uploaded) -> pd.DataFrame:
-    if uploaded is None:
-        return pd.DataFrame()
-    name = uploaded.name.lower()
-    if name.endswith(".parquet"):
-        df = pd.read_parquet(uploaded)
-    else:
-        # CSV separado por ; (padrão BR). Ajuste se necessário.
-        df = pd.read_csv(uploaded, sep=";", dtype=str, low_memory=False)
-    df.columns = [c.strip().lower() for c in df.columns]
-
-    # Datas
-    for c in DATE_COLS:
+def _post_load(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [c.lower() for c in df.columns]
+    # datas
+    for c in ["data_internacao","data_alta","data_obito","dthr_valida","dt_entrada_cti","dt_saida_cti","data_cirurgia_min","data_cirurgia_max"]:
         if c in df.columns:
-            df[c] = df[c].map(_to_dt)
-
-    # Numéricos
+            df[c] = pd.to_datetime(df[c], errors="coerce")
+    # numéricos
     for c in ["idade","ano","ano_internacao"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
-
-    # Tempo de permanência
+    # sexo
+    if "sexo" in df.columns:
+        df["sexo"] = (df["sexo"].astype(str).str.strip().str.upper()
+                      .replace({"M":"Masculino","F":"Feminino","MASCULINO":"Masculino","FEMININO":"Feminino"}))
+    # dias permanência
     if {"data_internacao","data_alta"}.issubset(df.columns):
         df["dias_permanencia"] = (df["data_alta"] - df["data_internacao"]).dt.days
-
-    # Normaliza sexo
-    if "sexo" in df.columns:
-        df["sexo"] = df["sexo"].astype(str).str.strip().str.upper().replace(
-            {"M":"Masculino","F":"Feminino","MASCULINO":"Masculino","FEMININO":"Feminino"}
-        )
-
-    # Faixas etárias
+    # faixas etárias
     if "idade" in df.columns:
         bins = [-1,0,4,11,17,24,34,44,54,64,74,84,120]
         labels = ["<1","1–4","5–11","12–17","18–24","25–34","35–44","45–54","55–64","65–74","75–84","85+"]
-        df["faixa_etaria"] = pd.cut(df["idade"], bins=bins, labels=labels, right=True)
-
-    return df
-
-def dedup_eventos(df: pd.DataFrame) -> pd.DataFrame:
-    # Remove duplicatas do mesmo episódio/AIH
+        df["faixa_etaria"] = pd.cut(pd.to_numeric(df["idade"], errors="coerce"), bins=bins, labels=labels, right=True)
+    # dedup de eventos (AIH)
     keys = [c for c in ["codigo_internacao","prontuario_anonimo","data_internacao","data_alta"] if c in df.columns]
     if keys:
-        df = df.drop_duplicates(subset=keys).copy()
+        df = df.drop_duplicates(subset=keys)
     return df
 
-def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
-    # 1 linha por paciente (último registro cronológico)
-    if {"prontuario_anonimo","data_internacao"}.issubset(df.columns):
-        return (df.sort_values(["prontuario_anonimo","data_internacao"])
-                  .groupby("prontuario_anonimo", as_index=False)
-                  .tail(1))
-    return df.drop_duplicates(subset=["prontuario_anonimo"])
+@st.cache_data(show_spinner=False)
+def load_parquet(file):
+    return _post_load(pd.read_parquet(file))
 
+@st.cache_resource(show_spinner=False)
+def load_duckdb(csv_paths):
+    """Registra 3 CSVs (EVOLUCOES, PROCED, CIDS/UTI) e cria view dataset unificada (lazy)."""
+    con = duckdb.connect(database=":memory:")
+    evo, proc, cti = csv_paths
+    con.execute("CREATE VIEW evolu AS SELECT * FROM read_csv_auto(?, sep=';', header=True, SAMPLE_SIZE=-1);", [evo])
+    con.execute("CREATE VIEW proced AS SELECT * FROM read_csv_auto(?, sep=';', header=True, SAMPLE_SIZE=-1);", [proc])
+    con.execute("CREATE VIEW cids AS SELECT * FROM read_csv_auto(?, sep=';', header=True, SAMPLE_SIZE=-1);", [cti])
+
+    # normaliza chaves para lower/trim e agrega procedimentos para não explodir cardinalidade
+    con.execute("""
+        CREATE VIEW evolu_n AS
+        SELECT
+          lower(trim(prontuario_anonimo)) AS prontuario_anonimo,
+          lower(trim(codigo_internacao)) AS codigo_internacao,
+          *
+        FROM evolu;
+
+        CREATE VIEW cids_n AS
+        SELECT
+          lower(trim(prontuario_anonimo)) AS prontuario_anonimo,
+          lower(trim(codigo_internacao)) AS codigo_internacao,
+          *
+        FROM cids;
+
+        CREATE VIEW proc_agg AS
+        SELECT
+          lower(trim(codigo_internacao)) AS codigo_internacao,
+          COUNT(DISTINCT codigo_procedimento) AS n_proced,
+          ANY_VALUE(codigo_procedimento) AS proc_prim,
+          ANY_VALUE(procedimento) AS proc_nome_prim,
+          MIN(COALESCE(data_cirurgia, data_internacao)) AS data_cirurgia_min,
+          MAX(COALESCE(data_cirurgia, data_internacao)) AS data_cirurgia_max
+        FROM proced
+        GROUP BY 1;
+
+        CREATE VIEW dataset AS
+        SELECT
+          e.*,
+          c.* EXCLUDE (codigo_internacao, prontuario_anonimo),
+          p.*
+        FROM evolu_n e
+        LEFT JOIN cids_n c USING (codigo_internacao, prontuario_anonimo)
+        LEFT JOIN proc_agg p USING (codigo_internacao);
+    """)
+    return con
+
+def df_from_duckdb(con, sql):
+    return con.execute(sql).df()
+
+# -------------------- filtros e indicadores --------------------
 def build_filters(df: pd.DataFrame):
     st.sidebar.header("Filtros")
     anos = sorted(df.get("ano_internacao", df.get("ano", pd.Series([], dtype=float))).dropna().unique().tolist())
@@ -111,10 +136,15 @@ def apply_filters(df, f):
         df = df[df["cidade_moradia"].isin(f["cidade"])]
     return df
 
-# --------- Indicadores ---------
+def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
+    if {"prontuario_anonimo","data_internacao"}.issubset(df.columns):
+        return (df.sort_values(["prontuario_anonimo","data_internacao"])
+                  .groupby("prontuario_anonimo", as_index=False).tail(1))
+    return df.drop_duplicates(subset=["prontuario_anonimo"])
+
 def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
     pacientes = df_pacientes["prontuario_anonimo"].nunique() if "prontuario_anonimo" in df_pacientes else np.nan
-    internacoes = df_eventos["codigo_internacao"].nunique() if "codigo_internacao" in df_eventos else np.nan
+    internacoes = df_eventos["codigo_internacao"].nunique() if "codigo_internacao" in df_eventos else len(df_eventos)
     tmi = df_eventos["dias_permanencia"].replace([np.inf,-np.inf], np.nan).dropna().mean() if "dias_permanencia" in df_eventos else np.nan
 
     mort_hosp = np.nan
@@ -135,54 +165,69 @@ def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
     return pacientes, internacoes, tmi, mort_hosp
 
 def reinternacao_30d_pos_proced(df: pd.DataFrame):
-    # Data do procedimento ~ data_internacao; exclui provável transferência (≤1 dia pós-alta)
     ok = {"prontuario_anonimo","codigo_internacao","data_internacao","data_alta"}.issubset(df.columns)
     if not ok: return np.nan
     s = df.sort_values(["prontuario_anonimo","data_internacao","data_alta"]).copy()
     s["next_dt_internacao"] = s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
-    s["delta_dias"] = (s["next_dt_internacao"] - s["data_internacao"]).dt.days
+    s["delta_proc"] = (s["next_dt_internacao"] - s["data_internacao"]).dt.days
     s["delta_pos_alta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
     s["transfer"] = s["delta_pos_alta"] <= 1
     base = s["codigo_internacao"].nunique()
-    reinternou = s[(s["delta_dias"].between(0,30, inclusive="both")) & (~s["transfer"])]["codigo_internacao"].nunique()
-    return (reinternou/base*100) if base else np.nan
+    numer = s[(s["delta_proc"].between(0,30, inclusive="both")) & (~s["transfer"])]["codigo_internacao"].nunique()
+    return (numer/base*100) if base else np.nan
 
 def reinternacao_30d_pos_alta(df: pd.DataFrame):
     ok = {"prontuario_anonimo","codigo_internacao","data_internacao","data_alta"}.issubset(df.columns)
     if not ok: return np.nan
     s = df.sort_values(["prontuario_anonimo","data_internacao","data_alta"]).copy()
     s["next_dt_internacao"] = s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
-    s["delta_pos_alta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
-    s["transfer"] = s["delta_pos_alta"] <= 1
+    s["delta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
+    s["transfer"] = s["delta"] <= 1
     base = s["codigo_internacao"].nunique()
-    reinternou = s[(s["delta_pos_alta"].between(0,30, inclusive="both")) & (~s["transfer"])]["codigo_internacao"].nunique()
-    return (reinternou/base*100) if base else np.nan
+    numer = s[(s["delta"].between(0,30, inclusive="both")) & (~s["transfer"])]["codigo_internacao"].nunique()
+    return (numer/base*100) if base else np.nan
 
-# --------- App ---------
-st.title("Perfil dos Pacientes – Alta Complexidade Cardiovascular")
+# -------------------- UI: carregamento --------------------
+st.title("🫀 Perfil dos Pacientes – Alta Complexidade Cardiovascular (SUS)")
 
-uploaded = st.file_uploader("Carregue o dataset único (CSV ';' ou Parquet).", type=["csv","parquet"])
-df_raw = load_data(uploaded)
+tab_parquet, tab_csv = st.tabs(["Parquet único (recomendado)", "3 CSVs grandes (DuckDB)"])
 
-if df_raw.empty:
-    st.info("Carregue o arquivo para visualizar o painel.")
+df = None
+with tab_parquet:
+    file_parquet = st.file_uploader("Carregue o Parquet único (dataset_unico_2019_2025.parquet)", type=["parquet"], key="pq")
+    if file_parquet:
+        df = load_parquet(file_parquet)
+
+with tab_csv:
+    c1, c2, c3 = st.columns(3)
+    evo = c1.file_uploader("EVOLUÇÕES (csv)", type=["csv"], key="evo")
+    proc = c2.file_uploader("PROCEDIMENTOS (csv)", type=["csv"], key="proc")
+    cti = c3.file_uploader("CIDs/UTI (csv)", type=["csv"], key="cti")
+    if evo and proc and cti:
+        tmpdir = tempfile.mkdtemp()
+        p_evo = os.path.join(tmpdir, "evo.csv"); open(p_evo, "wb").write(evo.getbuffer())
+        p_proc = os.path.join(tmpdir, "proc.csv"); open(p_proc, "wb").write(proc.getbuffer())
+        p_cti = os.path.join(tmpdir, "cti.csv"); open(p_cti, "wb").write(cti.getbuffer())
+        con = load_duckdb((p_evo, p_proc, p_cti))
+        # materializa um recorte inicial para filtros/gráficos; consultas adicionais podem ser puxadas conforme necessidade
+        df = df_from_duckdb(con, "SELECT * FROM dataset")
+        df = _post_load(df)
+
+if df is None or df.empty:
+    st.info("Carregue um Parquet único **ou** os 3 CSVs.")
     st.stop()
 
-# Dedup de eventos e visão de pacientes únicos
-df = dedup_eventos(df_raw)
-df_pac = pacientes_unicos(df)
-
-# Filtros (aplicados em eventos) e projeção para pacientes
+# -------------------- filtros e bases --------------------
 f = build_filters(df)
-df_f = apply_filters(df, f)
-df_pac_f = df_pac[df_pac["prontuario_anonimo"].isin(df_f["prontuario_anonimo"].unique())] if "prontuario_anonimo" in df_f else df_pac
+df_f = apply_filters(df, f)                 # eventos (AIHs) filtrados
+df_pac = pacientes_unicos(df_f)            # 1 linha por paciente filtrado
 
-# Toggle: base de gráficos de perfil
-modo_perfil = st.toggle("Contar por **paciente único** (perfil). Desative para contar por **internações**.", value=True)
-base = df_pac_f if modo_perfil else df_f
+# toggle de análise
+modo_perfil = st.toggle("Contar por **paciente único** (perfil). Desative para **internações**.", value=True)
+base = df_pac if modo_perfil else df_f
 
-# KPIs
-pacientes, internacoes, tmi, mort_hosp = kpis(df_f, df_pac_f)
+# -------------------- KPIs --------------------
+pacientes, internacoes, tmi, mort_hosp = kpis(df_f, df_pac)
 ri_proc = reinternacao_30d_pos_proced(df_f)
 ri_alta = reinternacao_30d_pos_alta(df_f)
 
@@ -196,7 +241,7 @@ k6.metric("Mortalidade hospitalar", f"{mort_hosp:.1f}%" if pd.notna(mort_hosp) e
 
 st.divider()
 
-# ---- Gráficos ----
+# -------------------- gráficos --------------------
 g1, g2 = st.columns(2)
 
 with g1:
@@ -251,7 +296,7 @@ else:
     st.info("Coluna 'cidade_moradia' não encontrada.")
 
 st.subheader("CID/Descrição (amostra)")
-cid_col = [c for c in df_f.columns if ("cid" in c.lower() or "descricao" in c.lower())]
+cid_col = [c for c in df_f.columns if ("cid" in c.lower() or "descricao" in c.lower() or "to_charsubstrievdescricao14000" in c.lower())]
 if cid_col:
     col = cid_col[0]
     top = (df_f[col].dropna().astype(str).str.upper().str[:50]
