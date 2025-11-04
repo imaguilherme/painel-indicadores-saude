@@ -307,6 +307,3 @@ if cid_col:
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("Não encontrei coluna de CID/descrição no dataset.")
-
-st.subheader("Amostra dos registros filtrados")
-st.dataframe(df_f.head(200))
