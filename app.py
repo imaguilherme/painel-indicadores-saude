@@ -1,158 +1,267 @@
+# app.py — Perfil dos Pacientes (2019–2025)
+# Requisitos: streamlit, pandas, numpy, plotly, python-dateutil
 
 import streamlit as st
 import pandas as pd
+import numpy as np
+from datetime import datetime
+from dateutil import parser
 import plotly.express as px
 import plotly.graph_objects as go
-from utils import read_csv_smart, derive_common_fields, percent
 
-st.set_page_config(page_title="Painel de Indicadores de Saúde", page_icon="🩺", layout="wide")
+# --------- Config ---------
+st.set_page_config(page_title="Perfil dos Pacientes – ACC", layout="wide")
 
-st.markdown("""
-# Painel de Indicadores Cardiovasculares – Perfil dos Pacientes
-""")
+# --------- Helpers ---------
+DATE_COLS = ["data_internacao","data_alta","data_obito","dthr_valida"]
 
-with st.sidebar:
-    st.header("Configurações")
-    pacientes_file = st.file_uploader("Base principal de internações (CSV)", type=["csv"])
-    procedimentos_file = st.file_uploader("Procedimentos (CSV)", type=["csv"])
-    uti_file = st.file_uploader("UTI / CTI (CSV)", type=["csv"])
-    st.markdown("---")
-    st.caption("Dica: use export de consultas (2019–2025) nos três arquivos.")
+def _to_dt(s):
+    if pd.isna(s): return pd.NaT
+    if isinstance(s, (pd.Timestamp, datetime)): return pd.to_datetime(s)
+    try:
+        return pd.to_datetime(parser.parse(str(s), dayfirst=True, yearfirst=False, fuzzy=True))
+    except Exception:
+        return pd.NaT
 
 @st.cache_data(show_spinner=False)
-def load_data(p_file, proc_file, uti_file):
-    dfs = {}
-    if p_file: 
-        dfp = read_csv_smart(p_file); dfs["pac"] = derive_common_fields(dfp)
+def load_data(uploaded) -> pd.DataFrame:
+    if uploaded is None:
+        return pd.DataFrame()
+    name = uploaded.name.lower()
+    if name.endswith(".parquet"):
+        df = pd.read_parquet(uploaded)
     else:
-        dfs["pac"] = pd.DataFrame()
-    if proc_file: 
-        dfs["proc"] = read_csv_smart(proc_file)
-    else:
-        dfs["proc"] = pd.DataFrame()
-    if uti_file: 
-        dfs["uti"] = read_csv_smart(uti_file)
-    else:
-        dfs["uti"] = pd.DataFrame()
-    return dfs
+        # CSV separado por ; (padrão BR). Ajuste se necessário.
+        df = pd.read_csv(uploaded, sep=";", dtype=str, low_memory=False)
+    df.columns = [c.strip().lower() for c in df.columns]
 
-dfs = load_data(pacientes_file, procedimentos_file, uti_file)
-pac, proc, uti = dfs["pac"], dfs["proc"], dfs["uti"]
+    # Datas
+    for c in DATE_COLS:
+        if c in df.columns:
+            df[c] = df[c].map(_to_dt)
 
-if pac.empty:
-    st.info("Carregue ao menos a base de internações para começar.")
+    # Numéricos
+    for c in ["idade","ano","ano_internacao"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Tempo de permanência
+    if {"data_internacao","data_alta"}.issubset(df.columns):
+        df["dias_permanencia"] = (df["data_alta"] - df["data_internacao"]).dt.days
+
+    # Normaliza sexo
+    if "sexo" in df.columns:
+        df["sexo"] = df["sexo"].astype(str).str.strip().str.upper().replace(
+            {"M":"Masculino","F":"Feminino","MASCULINO":"Masculino","FEMININO":"Feminino"}
+        )
+
+    # Faixas etárias
+    if "idade" in df.columns:
+        bins = [-1,0,4,11,17,24,34,44,54,64,74,84,120]
+        labels = ["<1","1–4","5–11","12–17","18–24","25–34","35–44","45–54","55–64","65–74","75–84","85+"]
+        df["faixa_etaria"] = pd.cut(df["idade"], bins=bins, labels=labels, right=True)
+
+    return df
+
+def dedup_eventos(df: pd.DataFrame) -> pd.DataFrame:
+    # Remove duplicatas do mesmo episódio/AIH
+    keys = [c for c in ["codigo_internacao","prontuario_anonimo","data_internacao","data_alta"] if c in df.columns]
+    if keys:
+        df = df.drop_duplicates(subset=keys).copy()
+    return df
+
+def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
+    # 1 linha por paciente (último registro cronológico)
+    if {"prontuario_anonimo","data_internacao"}.issubset(df.columns):
+        return (df.sort_values(["prontuario_anonimo","data_internacao"])
+                  .groupby("prontuario_anonimo", as_index=False)
+                  .tail(1))
+    return df.drop_duplicates(subset=["prontuario_anonimo"])
+
+def build_filters(df: pd.DataFrame):
+    st.sidebar.header("Filtros")
+    anos = sorted(df.get("ano_internacao", df.get("ano", pd.Series([], dtype=float))).dropna().unique().tolist())
+    ano_sel = st.sidebar.multiselect("Ano da internação", anos, default=anos)
+    sexos = sorted(df["sexo"].dropna().unique().tolist()) if "sexo" in df else []
+    sexo_sel = st.sidebar.multiselect("Sexo", sexos, default=sexos)
+    idade_min, idade_max = (int(np.nanmin(df["idade"])), int(np.nanmax(df["idade"]))) if "idade" in df and df["idade"].notna().any() else (0,120)
+    idade_sel = st.sidebar.slider("Idade", min_value=0, max_value=max(idade_max,1), value=(idade_min, idade_max), step=1)
+    carater_vals = sorted(df["tipo_evolucao"].dropna().unique().tolist()) if "tipo_evolucao" in df else []
+    carater_sel = st.sidebar.multiselect("Caráter do atendimento", carater_vals, default=carater_vals)
+    etnias = sorted(df["etnia"].dropna().unique().tolist()) if "etnia" in df else []
+    etnia_sel = st.sidebar.multiselect("Raça/Cor", etnias, default=etnias)
+    cidade_vals = sorted(df["cidade_moradia"].dropna().unique().tolist()) if "cidade_moradia" in df else []
+    cidade_sel = st.sidebar.multiselect("Município de residência", cidade_vals, default=cidade_vals[:25])
+    return {"ano": ano_sel, "sexo": sexo_sel, "idade": idade_sel, "carater": carater_sel, "etnia": etnia_sel, "cidade": cidade_sel}
+
+def apply_filters(df, f):
+    if "ano_internacao" in df.columns and f["ano"]:
+        df = df[df["ano_internacao"].isin(f["ano"])]
+    elif "ano" in df.columns and f["ano"]:
+        df = df[df["ano"].isin(f["ano"])]
+    if "sexo" in df.columns and f["sexo"]:
+        df = df[df["sexo"].isin(f["sexo"])]
+    if "idade" in df.columns:
+        df = df[(df["idade"] >= f["idade"][0]) & (df["idade"] <= f["idade"][1])]
+    if "tipo_evolucao" in df.columns and f["carater"]:
+        df = df[df["tipo_evolucao"].isin(f["carater"])]
+    if "etnia" in df.columns and f["etnia"]:
+        df = df[df["etnia"].isin(f["etnia"])]
+    if "cidade_moradia" in df.columns and f["cidade"]:
+        df = df[df["cidade_moradia"].isin(f["cidade"])]
+    return df
+
+# --------- Indicadores ---------
+def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
+    pacientes = df_pacientes["prontuario_anonimo"].nunique() if "prontuario_anonimo" in df_pacientes else np.nan
+    internacoes = df_eventos["codigo_internacao"].nunique() if "codigo_internacao" in df_eventos else np.nan
+    tmi = df_eventos["dias_permanencia"].replace([np.inf,-np.inf], np.nan).dropna().mean() if "dias_permanencia" in df_eventos else np.nan
+
+    mort_hosp = np.nan
+    if {"data_internacao","data_alta"}.issubset(df_eventos.columns):
+        e = df_eventos.copy()
+        if "data_obito" in e.columns:
+            e["obito_no_periodo"] = (e["data_obito"].notna()) & \
+                (e["data_obito"] >= e["data_internacao"]) & \
+                (e["data_obito"] <= (e["data_alta"] - pd.Timedelta(days=1)))
+        elif "evolucao" in e.columns:
+            e["obito_no_periodo"] = e["evolucao"].astype(str).str.contains("ÓBITO", case=False, na=False)
+        else:
+            e["obito_no_periodo"] = False
+        denom = e["codigo_internacao"].nunique() if "codigo_internacao" in e else len(e)
+        numer = e.loc[e["obito_no_periodo"]]
+        numer = numer["codigo_internacao"].nunique() if "codigo_internacao" in e else len(numer)
+        mort_hosp = (numer/denom*100) if denom else np.nan
+    return pacientes, internacoes, tmi, mort_hosp
+
+def reinternacao_30d_pos_proced(df: pd.DataFrame):
+    # Data do procedimento ~ data_internacao; exclui provável transferência (≤1 dia pós-alta)
+    ok = {"prontuario_anonimo","codigo_internacao","data_internacao","data_alta"}.issubset(df.columns)
+    if not ok: return np.nan
+    s = df.sort_values(["prontuario_anonimo","data_internacao","data_alta"]).copy()
+    s["next_dt_internacao"] = s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
+    s["delta_dias"] = (s["next_dt_internacao"] - s["data_internacao"]).dt.days
+    s["delta_pos_alta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
+    s["transfer"] = s["delta_pos_alta"] <= 1
+    base = s["codigo_internacao"].nunique()
+    reinternou = s[(s["delta_dias"].between(0,30, inclusive="both")) & (~s["transfer"])]["codigo_internacao"].nunique()
+    return (reinternou/base*100) if base else np.nan
+
+def reinternacao_30d_pos_alta(df: pd.DataFrame):
+    ok = {"prontuario_anonimo","codigo_internacao","data_internacao","data_alta"}.issubset(df.columns)
+    if not ok: return np.nan
+    s = df.sort_values(["prontuario_anonimo","data_internacao","data_alta"]).copy()
+    s["next_dt_internacao"] = s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
+    s["delta_pos_alta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
+    s["transfer"] = s["delta_pos_alta"] <= 1
+    base = s["codigo_internacao"].nunique()
+    reinternou = s[(s["delta_pos_alta"].between(0,30, inclusive="both")) & (~s["transfer"])]["codigo_internacao"].nunique()
+    return (reinternou/base*100) if base else np.nan
+
+# --------- App ---------
+st.title("Perfil dos Pacientes – Alta Complexidade Cardiovascular")
+
+uploaded = st.file_uploader("Carregue o dataset único (CSV ';' ou Parquet).", type=["csv","parquet"])
+df_raw = load_data(uploaded)
+
+if df_raw.empty:
+    st.info("Carregue o arquivo para visualizar o painel.")
     st.stop()
 
-# ----- Filters -----
-with st.sidebar:
-    anos = sorted(pac["ANO"].dropna().unique().tolist())
-    ano_sel = st.multiselect("Ano", anos, default=anos)
-    sexos = pac["SEXO"].dropna().unique().tolist()
-    sexo_sel = st.multiselect("Sexo", sexos, default=sexos)
-    raca = pac.get("RACA_COR", pd.Series(dtype=str)).dropna().unique().tolist()
-    raca_sel = st.multiselect("Raça/Cor", raca, default=raca)
-    st.markdown("---")
-    carater = pac.get("CARATER_ATENDIMENTO", pd.Series(dtype=str)).dropna().unique().tolist()
-    carater_sel = st.multiselect("Caráter do Atendimento", carater, default=carater)
+# Dedup de eventos e visão de pacientes únicos
+df = dedup_eventos(df_raw)
+df_pac = pacientes_unicos(df)
 
-df = pac.copy()
-if ano_sel: df = df[df["ANO"].isin(ano_sel)]
-if sexo_sel: df = df[df["SEXO"].isin(sexo_sel)]
-if raca_sel and "RACA_COR" in df.columns: df = df[df["RACA_COR"].isin(raca_sel)]
-if carater_sel and "CARATER_ATENDIMENTO" in df.columns: df = df[df["CARATER_ATENDIMENTO"].isin(carater_sel)]
+# Filtros (aplicados em eventos) e projeção para pacientes
+f = build_filters(df)
+df_f = apply_filters(df, f)
+df_pac_f = df_pac[df_pac["prontuario_anonimo"].isin(df_f["prontuario_anonimo"].unique())] if "prontuario_anonimo" in df_f else df_pac
 
-# ----- KPI ROW -----
-col1, col2, col3, col4 = st.columns(4)
-total_pac = df["ID_PACIENTE"].nunique() if "ID_PACIENTE" in df.columns else len(df)
-internacoes = len(df)
-estabs = df["UNIDADE_ADMISSAO"].nunique() if "UNIDADE_ADMISSAO" in df.columns else None
-proceds = len(proc) if not proc.empty else None
+# Toggle: base de gráficos de perfil
+modo_perfil = st.toggle("Contar por **paciente único** (perfil). Desative para contar por **internações**.", value=True)
+base = df_pac_f if modo_perfil else df_f
 
-col1.metric("Pacientes únicos", f"{total_pac:,}".replace(",", "."))
-col2.metric("Internações", f"{internacoes:,}".replace(",", "."))
-col3.metric("Estabelecimentos", estabs if estabs is not None else "—")
-col4.metric("Procedimentos", proceds if proceds is not None else "—")
+# KPIs
+pacientes, internacoes, tmi, mort_hosp = kpis(df_f, df_pac_f)
+ri_proc = reinternacao_30d_pos_proced(df_f)
+ri_alta = reinternacao_30d_pos_alta(df_f)
 
-# ----- Row: Sexo & Caráter -----
-c1, c2, c3 = st.columns([1,1,1])
-with c1:
-    if "SEXO" in df.columns:
-        s = df["SEXO"].value_counts().reset_index()
-        s.columns = ["SEXO","QTD"]
-        fig = px.pie(s, names="SEXO", values="QTD", hole=.45, title="Distribuição por Sexo")
+k1,k2,k3,k4,k5,k6 = st.columns(6)
+k1.metric("Pacientes (distintos)", f"{int(pacientes):,}".replace(",",".") if pd.notna(pacientes) else "—")
+k2.metric("Internações", f"{int(internacoes):,}".replace(",",".") if pd.notna(internacoes) else "—")
+k3.metric("Tempo médio de internação (dias)", f"{tmi:.1f}" if pd.notna(tmi) else "—")
+k4.metric("Reinternação 30d (procedimento)", f"{ri_proc:.1f}%" if pd.notna(ri_proc) else "—")
+k5.metric("Reinternação 30d (alta)", f"{ri_alta:.1f}%" if pd.notna(ri_alta) else "—")
+k6.metric("Mortalidade hospitalar", f"{mort_hosp:.1f}%" if pd.notna(mort_hosp) else "—")
+
+st.divider()
+
+# ---- Gráficos ----
+g1, g2 = st.columns(2)
+
+with g1:
+    st.subheader("Sexo")
+    if "sexo" in base.columns:
+        fig = px.bar(base.value_counts("sexo").rename("cont").reset_index(),
+                     x="sexo", y="cont", text_auto=True)
         st.plotly_chart(fig, use_container_width=True)
-with c2:
-    if "CARATER_ATENDIMENTO" in df.columns:
-        s = df["CARATER_ATENDIMENTO"].value_counts().reset_index()
-        s.columns = ["CARÁTER","QTD"]
-        fig = px.bar(s, x="CARÁTER", y="QTD", title="Caráter do Atendimento", text_auto='.2s')
-        st.plotly_chart(fig, use_container_width=True)
-with c3:
-    if "RACA_COR" in df.columns:
-        s = df["RACA_COR"].value_counts().reset_index()
-        s.columns = ["Raça/Cor","QTD"]
-        fig = px.bar(s, x="Raça/Cor", y="QTD", title="Raça e Cor", text_auto='.2s')
-        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Coluna 'sexo' não encontrada.")
 
-# ----- Age Pyramid -----
-if "FAIXA_ETARIA" in df.columns and "SEXO" in df.columns:
-    st.subheader("Pirâmide Etária")
-    g = df.groupby(["FAIXA_ETARIA","SEXO"]).size().reset_index(name="QTD")
-    # pivot to male negative values
-    g["QTD_ADJ"] = g.apply(lambda r: -r["QTD"] if str(r["SEXO"]).upper().startswith("M") else r["QTD"], axis=1)
-    fig = px.bar(g, x="QTD_ADJ", y="FAIXA_ETARIA", color="SEXO", orientation="h")
-    fig.update_layout(bargap=0.05, xaxis_title="Pacientes (M negativo / F positivo)")
+with g2:
+    st.subheader("Caráter do atendimento")
+    col = "tipo_evolucao" if "tipo_evolucao" in df_f.columns else None
+    if col:
+        ordem = df_f[col].value_counts().index.tolist()
+        fig = px.bar(df_f.value_counts(col).rename("cont").reset_index(),
+                     x=col, y="cont", text_auto=True, category_orders={col:ordem})
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Coluna 'tipo_evolucao' não encontrada.")
+
+st.subheader("Pirâmide etária")
+if {"idade","sexo","faixa_etaria"}.issubset(base.columns):
+    tmp = (base.dropna(subset=["faixa_etaria","sexo"])
+                .groupby(["faixa_etaria","sexo"]).size().reset_index(name="n"))
+    male = tmp[tmp["sexo"].eq("Masculino")].set_index("faixa_etaria")["n"].reindex(base["faixa_etaria"].cat.categories, fill_value=0)
+    female = tmp[tmp["sexo"].eq("Feminino")].set_index("faixa_etaria")["n"].reindex(base["faixa_etaria"].cat.categories, fill_value=0)
+    fig = go.Figure()
+    fig.add_bar(y=male.index.astype(str), x=-male.values, name="Masculino", orientation="h")
+    fig.add_bar(y=female.index.astype(str), x=female.values, name="Feminino", orientation="h")
+    fig.update_layout(barmode="overlay", xaxis=dict(title="Pacientes (neg=M)"), yaxis=dict(title="Faixa etária"))
     st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Requer colunas 'idade' e 'sexo'.")
 
-# ----- LOS & Mortalidade -----
-st.subheader("Tempo de Internação e Desfechos")
-c4, c5, c6 = st.columns(3)
-with c4:
-    if "LOS_dias" in df.columns:
-        fig = px.histogram(df, x="LOS_dias", nbins=40, title="Distribuição do Tempo de Internação (dias)")
-        st.plotly_chart(fig, use_container_width=True)
-with c5:
-    if "DATA_OBITO" in df.columns:
-        mort = df["DATA_OBITO"].notna().mean()*100
-        st.metric(" Mortalidade hospitalar (%)", f"{mort:.2f}%")
-with c6:
-    if "LOS_UTI_dias" in df.columns:
-        fig = px.histogram(df.dropna(subset=["LOS_UTI_dias"]), x="LOS_UTI_dias", nbins=30, title="Tempo de UTI (dias)")
-        st.plotly_chart(fig, use_container_width=True)
+st.subheader("Raça/Cor × Sexo")
+if {"etnia","sexo"}.issubset(base.columns):
+    fig = px.bar(base.value_counts(["etnia","sexo"]).rename("cont").reset_index(),
+                 x="etnia", y="cont", color="sexo", barmode="group", text_auto=True)
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Requer colunas 'etnia' e 'sexo'.")
 
-# ----- Geografia (por Município/UF se houver) -----
-st.subheader("Distribuição Geográfica (Residência)")
-geo_cols = [c for c in ["UF","MUNICIPIO_RESIDENCIA","CIDADE_MORADIA"] if c in df.columns]
-if geo_cols:
-    c_geo1, c_geo2 = st.columns([1,1])
-    geo_col = st.selectbox("Coluna de localidade disponível:", geo_cols, index=0)
-    g = df.groupby(geo_col).size().reset_index(name="Pacientes")
-    fig = px.bar(g, x=geo_col, y="Pacientes", title=f"Pacientes por {geo_col}", text_auto='.2s')
-    c_geo1.plotly_chart(fig, use_container_width=True)
-    c_geo2.dataframe(g.sort_values("Pacientes", ascending=False), use_container_width=True)
+st.subheader("Top municípios de residência")
+if "cidade_moradia" in base.columns:
+    topN = (base["cidade_moradia"].dropna().value_counts().head(20).reset_index())
+    topN.columns = ["Município","Pacientes/Internações"]
+    fig = px.treemap(topN, path=["Município"], values="Pacientes/Internações")
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Coluna 'cidade_moradia' não encontrada.")
 
-# ----- Procedimentos & CID -----
-st.subheader("Procedimentos e CID-10")
-cols = st.columns(2)
-with cols[0]:
-    if not proc.empty:
-        top_proc = proc.groupby(proc.columns[proc.columns.str.contains("PROCED", case=False, regex=True)][0]).size()
-        top_proc = top_proc.sort_values(ascending=False).head(20).reset_index()
-        top_proc.columns = ["Procedimento","QTD"]
-        fig = px.bar(top_proc, x="QTD", y="Procedimento", orientation="h", title="Top 20 procedimentos")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Carregue a base de procedimentos para ver o ranking.")
-with cols[1]:
-    cid_cols = [c for c in df.columns if "CID" in c.upper() or "CID10" in c.upper()]
-    if cid_cols:
-        c = cid_cols[0]
-        top_cid = df.groupby(c).size().sort_values(ascending=False).head(20).reset_index()
-        top_cid.columns = ["CID-10","QTD"]
-        fig = px.bar(top_cid, x="QTD", y="CID-10", orientation="h", title="Top 20 CID-10 (principal)")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Inclua uma coluna de CID-10 na base de internações para este gráfico.")
+st.subheader("CID/Descrição (amostra)")
+cid_col = [c for c in df_f.columns if ("cid" in c.lower() or "descricao" in c.lower())]
+if cid_col:
+    col = cid_col[0]
+    top = (df_f[col].dropna().astype(str).str.upper().str[:50]
+           .value_counts().head(25).reset_index())
+    top.columns = ["CID/Descrição (amostra)", "Frequência"]
+    fig = px.bar(top, x="CID/Descrição (amostra)", y="Frequência", text_auto=True)
+    fig.update_layout(xaxis_tickangle=-35)
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Não encontrei coluna de CID/descrição no dataset.")
 
-st.markdown("—")
-st.caption("Template criado por você + ChatGPT. Personalize nas páginas para novas análises (UTI, Readmissão 30d, etc.).")
+st.subheader("Amostra dos registros filtrados")
+st.dataframe(df_f.head(200))
