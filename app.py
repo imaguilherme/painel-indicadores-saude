@@ -1,14 +1,14 @@
 # app.py — Perfil dos Pacientes (2019–2025) | suporta Parquet único OU 3 CSVs grandes (DuckDB)
 # Requisitos: streamlit, pandas, numpy, plotly, python-dateutil, pyarrow, duckdb
 
-#import streamlit as st
-#import pandas as pd
-#import numpy as np
-#from dateutil import parser
-#from datetime import datetime
-#import plotly.express as px
-#import plotly.graph_objects as go
-#import duckdb, os, tempfile
+import streamlit as st
+import pandas as pd
+import numpy as np
+from dateutil import parser
+from datetime import datetime
+import plotly.express as px
+import plotly.graph_objects as go
+import duckdb, os, tempfile
 
 st.set_page_config(page_title="Perfil dos Pacientes – ACC", layout="wide")
 
