@@ -188,7 +188,7 @@ def reinternacao_30d_pos_alta(df: pd.DataFrame):
     return (numer/base*100) if base else np.nan
 
 # -------------------- UI: carregamento --------------------
-st.title("🫀 Perfil dos Pacientes – Alta Complexidade Cardiovascular (SUS)")
+st.title("Perfil dos Pacientes")
 
 tab_parquet, tab_csv = st.tabs(["Parquet único (recomendado)", "3 CSVs grandes (DuckDB)"])
 
