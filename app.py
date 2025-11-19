@@ -311,7 +311,7 @@ k6.metric("Mortalidade hospitalar", f"{mort_hosp:.1f}%" if pd.notna(mort_hosp) e
 
 st.divider()
 
-# -------------------- "Abas" de indicador + comparativo anual (linha logo abaixo dos KPIs) --------------------
+# -------------------- "Abas" de indicador + comparativo anual --------------------
 st.markdown("### Indicadores principais")
 
 indicador_top = st.radio(
@@ -357,7 +357,7 @@ else:
 
 st.divider()
 
-# -------------------- GRID PRINCIPAL (3 colunas como no print) --------------------
+# -------------------- GRID PRINCIPAL--------------------
 col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
 
 # ========= COLUNA ESQUERDA =========
