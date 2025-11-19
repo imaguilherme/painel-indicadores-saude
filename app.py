@@ -102,45 +102,14 @@ def load_duckdb(csv_paths):
 def df_from_duckdb(con, sql):
     return con.execute(sql).df()
 
-# -------------------- filtros e indicadores --------------------
-def build_filters(df: pd.DataFrame):
-    st.sidebar.header("Filtros")
-    anos = sorted(df.get("ano_internacao", df.get("ano", pd.Series([], dtype=float))).dropna().unique().tolist())
-    ano_sel = st.sidebar.multiselect("Ano da internação", anos, default=anos)
-    sexos = sorted(df["sexo"].dropna().unique().tolist()) if "sexo" in df else []
-    sexo_sel = st.sidebar.multiselect("Sexo", sexos, default=sexos)
-    idade_min, idade_max = (int(np.nanmin(df["idade"])), int(np.nanmax(df["idade"]))) if "idade" in df and df["idade"].notna().any() else (0,120)
-    idade_sel = st.sidebar.slider("Idade", min_value=0, max_value=max(idade_max,1), value=(idade_min, idade_max), step=1)
-    carater_vals = sorted(df["tipo_evolucao"].dropna().unique().tolist()) if "tipo_evolucao" in df else []
-    carater_sel = st.sidebar.multiselect("Caráter do atendimento", carater_vals, default=carater_vals)
-    etnias = sorted(df["etnia"].dropna().unique().tolist()) if "etnia" in df else []
-    etnia_sel = st.sidebar.multiselect("Raça/Cor", etnias, default=etnias)
-    cidade_vals = sorted(df["cidade_moradia"].dropna().unique().tolist()) if "cidade_moradia" in df else []
-    cidade_sel = st.sidebar.multiselect("Município de residência", cidade_vals, default=cidade_vals[:25])
-    return {"ano": ano_sel, "sexo": sexo_sel, "idade": idade_sel, "carater": carater_sel, "etnia": etnia_sel, "cidade": cidade_sel}
-
-def apply_filters(df, f):
-    if "ano_internacao" in df.columns and f["ano"]:
-        df = df[df["ano_internacao"].isin(f["ano"])]
-    elif "ano" in df.columns and f["ano"]:
-        df = df[df["ano"].isin(f["ano"])]
-    if "sexo" in df.columns and f["sexo"]:
-        df = df[df["sexo"].isin(f["sexo"])]
-    if "idade" in df.columns:
-        df = df[(df["idade"] >= f["idade"][0]) & (df["idade"] <= f["idade"][1])]
-    if "tipo_evolucao" in df.columns and f["carater"]:
-        df = df[df["tipo_evolucao"].isin(f["carater"])]
-    if "etnia" in df.columns and f["etnia"]:
-        df = df[df["etnia"].isin(f["etnia"])]
-    if "cidade_moradia" in df.columns and f["cidade"]:
-        df = df[df["cidade_moradia"].isin(f["cidade"])]
-    return df
-
+# -------------------- funções de base --------------------
 def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
     if {"prontuario_anonimo","data_internacao"}.issubset(df.columns):
         return (df.sort_values(["prontuario_anonimo","data_internacao"])
                   .groupby("prontuario_anonimo", as_index=False).tail(1))
-    return df.drop_duplicates(subset=["prontuario_anonimo"])
+    if "prontuario_anonimo" in df.columns:
+        return df.drop_duplicates(subset=["prontuario_anonimo"])
+    return df
 
 def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
     pacientes = df_pacientes["prontuario_anonimo"].nunique() if "prontuario_anonimo" in df_pacientes else np.nan
@@ -187,6 +156,103 @@ def reinternacao_30d_pos_alta(df: pd.DataFrame):
     numer = s[(s["delta"].between(0,30, inclusive="both")) & (~s["transfer"])]["codigo_internacao"].nunique()
     return (numer/base*100) if base else np.nan
 
+# -------------------- filtros e indicadores --------------------
+def build_filters(df: pd.DataFrame):
+    st.sidebar.header("Filtros")
+
+    # ano
+    anos_col = "ano_internacao" if "ano_internacao" in df.columns else ("ano" if "ano" in df.columns else None)
+    if anos_col:
+        anos = sorted(df[anos_col].dropna().unique().tolist())
+    else:
+        anos = []
+    ano_sel = st.sidebar.multiselect("Ano da internação", anos, default=anos)
+
+    # idade
+    if "idade" in df.columns and df["idade"].notna().any():
+        idade_min, idade_max = int(np.nanmin(df["idade"])), int(np.nanmax(df["idade"]))
+    else:
+        idade_min, idade_max = 0, 120
+    idade_sel = st.sidebar.slider("Idade", min_value=0, max_value=max(idade_max,1),
+                                  value=(idade_min, idade_max), step=1)
+
+    # estado (se existir)
+    estado_col = next((c for c in df.columns if c.lower() in ["estado_residencia","uf_residencia","uf","estado","sigla_uf"]), None)
+    estados_sel = []
+    if estado_col:
+        estados = sorted(df[estado_col].dropna().astype(str).unique().tolist())
+        estados_sel = st.sidebar.multiselect("Estado de residência", estados, default=estados)
+
+    # região de saúde (se existir)
+    regiao_col = next((c for c in df.columns if "regiao" in c.lower() and "saude" in c.lower()), None)
+    regioes_sel = []
+    if regiao_col:
+        regioes = sorted(df[regiao_col].dropna().astype(str).unique().tolist())
+        regioes_sel = st.sidebar.multiselect("Região de saúde", regioes, default=regioes)
+
+    # município de residência (lista baseada em pacientes únicos)
+    df_pac_ref = pacientes_unicos(df)
+    cidade_col = "cidade_moradia" if "cidade_moradia" in df_pac_ref.columns else None
+    cidades_sel = []
+    if cidade_col:
+        cidade_vals = sorted(df_pac_ref[cidade_col].dropna().astype(str).unique().tolist())
+        # limitar default pra não ficar gigante
+        default_cidades = cidade_vals if len(cidade_vals) <= 25 else cidade_vals[:25]
+        cidades_sel = st.sidebar.multiselect("Município de residência", cidade_vals, default=default_cidades)
+
+    return {
+        "ano": ano_sel,
+        "idade": idade_sel,
+        "estado": estados_sel,
+        "regiao": regioes_sel,
+        "cidade": cidades_sel,
+    }
+
+def apply_filters(df, f):
+    # ano
+    if "ano_internacao" in df.columns and f["ano"]:
+        df = df[df["ano_internacao"].isin(f["ano"])]
+    elif "ano" in df.columns and f["ano"]:
+        df = df[df["ano"].isin(f["ano"])]
+
+    # idade
+    if "idade" in df.columns and f["idade"]:
+        df = df[(df["idade"] >= f["idade"][0]) & (df["idade"] <= f["idade"][1])]
+
+    # estado
+    estado_col = next((c for c in df.columns if c.lower() in ["estado_residencia","uf_residencia","uf","estado","sigla_uf"]), None)
+    if estado_col and f["estado"]:
+        df = df[df[estado_col].isin(f["estado"])]
+
+    # região de saúde
+    regiao_col = next((c for c in df.columns if "regiao" in c.lower() and "saude" in c.lower()), None)
+    if regiao_col and f["regiao"]:
+        df = df[df[regiao_col].isin(f["regiao"])]
+
+    # município
+    if "cidade_moradia" in df.columns and f["cidade"]:
+        df = df[df["cidade_moradia"].isin(f["cidade"])]
+
+    return df
+
+def show_active_filters(f):
+    partes = []
+    if f["ano"]:
+        partes.append("**Ano:** " + ", ".join(str(a) for a in f["ano"]))
+    if f["idade"]:
+        partes.append(f"**Idade:** {f['idade'][0]}–{f['idade'][1]} anos")
+    if f["estado"]:
+        partes.append("**Estado:** " + ", ".join(f["estado"]))
+    if f["regiao"]:
+        partes.append("**Região de saúde:** " + ", ".join(f["regiao"]))
+    if f["cidade"]:
+        partes.append("**Município:** " + ", ".join(f["cidade"]))
+
+    if partes:
+        st.markdown("🔎 **Filtros ativos:** " + " | ".join(partes))
+    else:
+        st.markdown("🔎 **Filtros ativos:** nenhum filtro aplicado.")
+
 # -------------------- UI: carregamento --------------------
 st.title("Perfil dos Pacientes")
 
@@ -222,6 +288,10 @@ f = build_filters(df)
 df_f = apply_filters(df, f)                 # eventos (AIHs) filtrados
 df_pac = pacientes_unicos(df_f)            # 1 linha por paciente filtrado
 
+# mostra filtros ativos no corpo da página
+show_active_filters(f)
+st.divider()
+
 # toggle de análise
 modo_perfil = st.toggle("Contar por **paciente único** (perfil). Desative para **internações**.", value=True)
 base = df_pac if modo_perfil else df_f
@@ -241,69 +311,182 @@ k6.metric("Mortalidade hospitalar", f"{mort_hosp:.1f}%" if pd.notna(mort_hosp) e
 
 st.divider()
 
-# -------------------- gráficos --------------------
+# -------------------- comparação por ano / indicador --------------------
+st.subheader("Evolução anual dos atendimentos")
+
+indicador_ano = st.selectbox(
+    "Indicador para comparar os anos",
+    ["Internações", "Pacientes distintos"],
+    index=0,
+)
+
+ano_col = "ano_internacao" if "ano_internacao" in df_f.columns else ("ano" if "ano" in df_f.columns else None)
+if ano_col:
+    df_year = df_f.copy()
+    df_year = df_year[~df_year[ano_col].isna()]
+    if not df_year.empty:
+        grp = df_year.groupby(ano_col)
+        if indicador_ano == "Internações":
+            if "codigo_internacao" in df_year.columns:
+                serie = grp["codigo_internacao"].nunique()
+            else:
+                serie = grp.size()
+            y_label = "Internações"
+        else:
+            if "prontuario_anonimo" in df_year.columns:
+                serie = grp["prontuario_anonimo"].nunique()
+            else:
+                serie = grp.size()
+            y_label = "Pacientes distintos"
+
+        df_plot = serie.reset_index(name="valor").sort_values(ano_col)
+        fig_ano = px.bar(df_plot, x=ano_col, y="valor", text_auto=True)
+        fig_ano.update_layout(
+            xaxis_title="Ano",
+            yaxis_title=y_label,
+            height=350,
+            margin=dict(t=40, b=40)
+        )
+        st.plotly_chart(fig_ano, use_container_width=True)
+    else:
+        st.info("Sem dados para o comparativo anual com os filtros atuais.")
+else:
+    st.info("Coluna de ano não encontrada no dataset.")
+
+st.divider()
+
+# -------------------- gráficos de perfil --------------------
+# 1ª linha: Sexo + Caráter de atendimento (quando existir)
 g1, g2 = st.columns(2)
 
 with g1:
     st.subheader("Sexo")
     if "sexo" in base.columns:
-        fig = px.bar(base.value_counts("sexo").rename("cont").reset_index(),
-                     x="sexo", y="cont", text_auto=True)
+        df_sexo = base.value_counts("sexo").rename("cont").reset_index()
+        fig = px.bar(df_sexo, x="sexo", y="cont", text_auto=True)
+        fig.update_layout(
+            height=300,  # SIZE MENOR
+            margin=dict(t=40, b=30)
+        )
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Coluna 'sexo' não encontrada.")
 
 with g2:
-    st.subheader("Caráter do atendimento")
-    col = "tipo_evolucao" if "tipo_evolucao" in df_f.columns else None
-    if col:
-        ordem = df_f[col].value_counts().index.tolist()
-        fig = px.bar(df_f.value_counts(col).rename("cont").reset_index(),
-                     x=col, y="cont", text_auto=True, category_orders={col:ordem})
+    # tentar usar coluna de caráter de atendimento (evitar 'caráter da evolução')
+    carater_col = None
+    for cand in ["carater_atendimento","caracter_atendimento","carater","caráter_atendimento","carater_atend"]:
+        if cand in df_f.columns:
+            carater_col = cand
+            break
+
+    if carater_col:
+        st.subheader("Caráter do atendimento")
+        ordem = df_f[carater_col].value_counts().index.tolist()
+        df_car = df_f.value_counts(carater_col).rename("cont").reset_index()
+        fig = px.bar(df_car, x=carater_col, y="cont", text_auto=True,
+                     category_orders={carater_col: ordem})
+        fig.update_layout(
+            height=300,
+            xaxis_title="Caráter do atendimento",
+            margin=dict(t=40, b=80)
+        )
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("Coluna 'tipo_evolucao' não encontrada.")
+        # se não existir coluna específica, não forçar "caráter da evolução"
+        st.info("Coluna de 'caráter do atendimento' não encontrada no dataset.")
 
-st.subheader("Pirâmide etária")
-if {"idade","sexo","faixa_etaria"}.issubset(base.columns):
-    tmp = (base.dropna(subset=["faixa_etaria","sexo"])
-                .groupby(["faixa_etaria","sexo"]).size().reset_index(name="n"))
-    male = tmp[tmp["sexo"].eq("Masculino")].set_index("faixa_etaria")["n"].reindex(base["faixa_etaria"].cat.categories, fill_value=0)
-    female = tmp[tmp["sexo"].eq("Feminino")].set_index("faixa_etaria")["n"].reindex(base["faixa_etaria"].cat.categories, fill_value=0)
-    fig = go.Figure()
-    fig.add_bar(y=male.index.astype(str), x=-male.values, name="Masculino", orientation="h")
-    fig.add_bar(y=female.index.astype(str), x=female.values, name="Feminino", orientation="h")
-    fig.update_layout(barmode="overlay", xaxis=dict(title="Pacientes (neg=M)"), yaxis=dict(title="Faixa etária"))
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Requer colunas 'idade' e 'sexo'.")
+# 2ª linha: Pirâmide etária + Raça/Cor × Sexo (tudo mais juntinho)
+c3, c4 = st.columns(2)
 
-st.subheader("Raça/Cor × Sexo")
-if {"etnia","sexo"}.issubset(base.columns):
-    fig = px.bar(base.value_counts(["etnia","sexo"]).rename("cont").reset_index(),
-                 x="etnia", y="cont", color="sexo", barmode="group", text_auto=True)
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Requer colunas 'etnia' e 'sexo'.")
+with c3:
+    st.subheader("Pirâmide etária")
+    if {"idade","sexo","faixa_etaria"}.issubset(base.columns):
+        tmp = (base.dropna(subset=["faixa_etaria","sexo"])
+                    .groupby(["faixa_etaria","sexo"]).size().reset_index(name="n"))
+        male = tmp[tmp["sexo"].eq("Masculino")].set_index("faixa_etaria")["n"].reindex(
+            base["faixa_etaria"].cat.categories, fill_value=0
+        )
+        female = tmp[tmp["sexo"].eq("Feminino")].set_index("faixa_etaria")["n"].reindex(
+            base["faixa_etaria"].cat.categories, fill_value=0
+        )
+        fig = go.Figure()
+        fig.add_bar(y=male.index.astype(str), x=-male.values, name="Masculino", orientation="h")
+        fig.add_bar(y=female.index.astype(str), x=female.values, name="Feminino", orientation="h")
+        fig.update_layout(
+            barmode="overlay",
+            xaxis=dict(title="Pacientes (neg=M)"),
+            yaxis=dict(title="Faixa etária"),
+            height=400,
+            margin=dict(t=40, b=40)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Requer colunas 'idade', 'sexo' e 'faixa_etaria'.")
 
-st.subheader("Top municípios de residência")
-if "cidade_moradia" in base.columns:
-    topN = (base["cidade_moradia"].dropna().value_counts().head(20).reset_index())
-    topN.columns = ["Município","Pacientes/Internações"]
-    fig = px.treemap(topN, path=["Município"], values="Pacientes/Internações")
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Coluna 'cidade_moradia' não encontrada.")
+with c4:
+    st.subheader("Raça/Cor × Sexo")
+    if {"etnia","sexo"}.issubset(base.columns):
+        df_etnia = (base.value_counts(["etnia","sexo"])
+                         .rename("cont").reset_index())
+        fig = px.bar(df_etnia, x="etnia", y="cont", color="sexo",
+                     barmode="group", text_auto=True)
+        fig.update_layout(
+            xaxis_title="Raça/Cor",
+            yaxis_title="Pacientes/Internações",
+            height=400,
+            margin=dict(t=40, b=80)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Requer colunas 'etnia' e 'sexo'.")
 
-st.subheader("CID/Descrição (amostra)")
-cid_col = [c for c in df_f.columns if ("cid" in c.lower() or "descricao" in c.lower() or "to_charsubstrievdescricao14000" in c.lower())]
-if cid_col:
-    col = cid_col[0]
-    top = (df_f[col].dropna().astype(str).str.upper().str[:50]
-           .value_counts().head(25).reset_index())
-    top.columns = ["CID/Descrição (amostra)", "Frequência"]
-    fig = px.bar(top, x="CID/Descrição (amostra)", y="Frequência", text_auto=True)
-    fig.update_layout(xaxis_tickangle=-35)
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Não encontrei coluna de CID/descrição no dataset.")
+# 3ª linha: Treemap + CID/Descrição
+c5, c6 = st.columns(2)
+
+with c5:
+    st.subheader("Distribuição geográfica (treemap)")
+    if "cidade_moradia" in base.columns:
+        df_geo = base.dropna(subset=["cidade_moradia"]).copy()
+        df_geo["Pacientes/Internações"] = 1
+
+        # tentar hierarquia: Estado > Região de Saúde > Município
+        estado_col = next((c for c in df_geo.columns if c.lower() in ["estado_residencia","uf_residencia","uf","estado","sigla_uf"]), None)
+        regiao_col = next((c for c in df_geo.columns if "regiao" in c.lower() and "saude" in c.lower()), None)
+
+        path_cols = []
+        if estado_col: path_cols.append(estado_col)
+        if regiao_col: path_cols.append(regiao_col)
+        path_cols.append("cidade_moradia")
+
+        fig = px.treemap(
+            df_geo,
+            path=path_cols,
+            values="Pacientes/Internações"
+        )
+        fig.update_layout(
+            height=450,
+            margin=dict(t=40, l=0, r=0, b=0)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("Use os filtros de Estado / Região de saúde / Município para refinar o treemap.")
+    else:
+        st.info("Coluna 'cidade_moradia' não encontrada.")
+
+with c6:
+    st.subheader("CID/Descrição (amostra)")
+    cid_col = [c for c in df_f.columns if ("cid" in c.lower() or "descricao" in c.lower() or "to_charsubstrievdescricao14000" in c.lower())]
+    if cid_col:
+        col = cid_col[0]
+        top = (df_f[col].dropna().astype(str).str.upper().str[:50]
+               .value_counts().head(25).reset_index())
+        top.columns = ["CID/Descrição (amostra)", "Frequência"]
+        fig = px.bar(top, x="CID/Descrição (amostra)", y="Frequência", text_auto=True)
+        fig.update_layout(
+            xaxis_tickangle=-35,
+            height=450,
+            margin=dict(t=40, b=120)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Não encontrei coluna de CID/descrição no dataset.")
