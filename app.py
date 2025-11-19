@@ -311,40 +311,42 @@ k6.metric("Mortalidade hospitalar", f"{mort_hosp:.1f}%" if pd.notna(mort_hosp) e
 
 st.divider()
 
-# -------------------- comparação por ano / indicador --------------------
-st.subheader("Evolução anual dos atendimentos")
+# -------------------- "Abas" de indicador + comparativo anual (linha logo abaixo dos KPIs) --------------------
+st.markdown("### Indicadores principais")
 
-indicador_ano = st.selectbox(
-    "Indicador para comparar os anos",
-    ["Internações", "Pacientes distintos"],
-    index=0,
+indicador_top = st.radio(
+    "Selecione o indicador para o comparativo anual:",
+    ["Quantidade de pacientes", "Quantidade de internações"],
+    horizontal=True,
+    key="ind_top"
 )
 
 ano_col = "ano_internacao" if "ano_internacao" in df_f.columns else ("ano" if "ano" in df_f.columns else None)
+
 if ano_col:
-    df_year = df_f.copy()
-    df_year = df_year[~df_year[ano_col].isna()]
+    df_year = df_f[~df_f[ano_col].isna()].copy()
     if not df_year.empty:
         grp = df_year.groupby(ano_col)
-        if indicador_ano == "Internações":
-            if "codigo_internacao" in df_year.columns:
-                serie = grp["codigo_internacao"].nunique()
-            else:
-                serie = grp.size()
-            y_label = "Internações"
-        else:
+
+        if indicador_top == "Quantidade de pacientes":
             if "prontuario_anonimo" in df_year.columns:
                 serie = grp["prontuario_anonimo"].nunique()
             else:
                 serie = grp.size()
             y_label = "Pacientes distintos"
+        else:  # Quantidade de internações
+            if "codigo_internacao" in df_year.columns:
+                serie = grp["codigo_internacao"].nunique()
+            else:
+                serie = grp.size()
+            y_label = "Internações"
 
         df_plot = serie.reset_index(name="valor").sort_values(ano_col)
         fig_ano = px.bar(df_plot, x=ano_col, y="valor", text_auto=True)
         fig_ano.update_layout(
             xaxis_title="Ano",
             yaxis_title=y_label,
-            height=350,
+            height=280,
             margin=dict(t=40, b=40)
         )
         st.plotly_chart(fig_ano, use_container_width=True)
@@ -355,51 +357,51 @@ else:
 
 st.divider()
 
-# -------------------- gráficos de perfil --------------------
-# 1ª linha: Sexo + Caráter de atendimento (quando existir)
-g1, g2 = st.columns(2)
+# -------------------- GRID PRINCIPAL (3 colunas como no print) --------------------
+col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
 
-with g1:
-    st.subheader("Sexo")
-    if "sexo" in base.columns:
-        df_sexo = base.value_counts("sexo").rename("cont").reset_index()
-        fig = px.bar(df_sexo, x="sexo", y="cont", text_auto=True)
-        fig.update_layout(
-            height=300,  # SIZE MENOR
-            margin=dict(t=40, b=30)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Coluna 'sexo' não encontrada.")
+# ========= COLUNA ESQUERDA =========
+with col_esq:
+    # linha Sexo + Caráter de Atendimento
+    c1, c2 = st.columns(2)
 
-with g2:
-    # tentar usar coluna de caráter de atendimento (evitar 'caráter da evolução')
-    carater_col = None
-    for cand in ["carater_atendimento","caracter_atendimento","carater","caráter_atendimento","carater_atend"]:
-        if cand in df_f.columns:
-            carater_col = cand
-            break
+    with c1:
+        st.subheader("Sexo")
+        if "sexo" in base.columns:
+            df_sexo = base.value_counts("sexo").rename("cont").reset_index()
+            fig = px.bar(df_sexo, x="sexo", y="cont", text_auto=True)
+            fig.update_layout(
+                height=230,
+                margin=dict(t=40, b=30)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Coluna 'sexo' não encontrada.")
 
-    if carater_col:
+    with c2:
+        # Caráter de atendimento (se existir)
+        carater_col = None
+        for cand in ["carater_atendimento","caracter_atendimento","carater","caráter_atendimento","carater_atend"]:
+            if cand in df_f.columns:
+                carater_col = cand
+                break
+
         st.subheader("Caráter do atendimento")
-        ordem = df_f[carater_col].value_counts().index.tolist()
-        df_car = df_f.value_counts(carater_col).rename("cont").reset_index()
-        fig = px.bar(df_car, x=carater_col, y="cont", text_auto=True,
-                     category_orders={carater_col: ordem})
-        fig.update_layout(
-            height=300,
-            xaxis_title="Caráter do atendimento",
-            margin=dict(t=40, b=80)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        # se não existir coluna específica, não forçar "caráter da evolução"
-        st.info("Coluna de 'caráter do atendimento' não encontrada no dataset.")
+        if carater_col:
+            ordem = df_f[carater_col].value_counts().index.tolist()
+            df_car = df_f.value_counts(carater_col).rename("cont").reset_index()
+            fig = px.bar(df_car, x=carater_col, y="cont", text_auto=True,
+                         category_orders={carater_col: ordem})
+            fig.update_layout(
+                height=230,
+                xaxis_title="",
+                margin=dict(t=40, b=80)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Coluna de 'caráter do atendimento' não encontrada.")
 
-# 2ª linha: Pirâmide etária + Raça/Cor × Sexo (tudo mais juntinho)
-c3, c4 = st.columns(2)
-
-with c3:
+    # Pirâmide etária (abaixo, ocupando a largura toda da coluna)
     st.subheader("Pirâmide etária")
     if {"idade","sexo","faixa_etaria"}.issubset(base.columns):
         tmp = (base.dropna(subset=["faixa_etaria","sexo"])
@@ -417,40 +419,21 @@ with c3:
             barmode="overlay",
             xaxis=dict(title="Pacientes (neg=M)"),
             yaxis=dict(title="Faixa etária"),
-            height=400,
+            height=380,
             margin=dict(t=40, b=40)
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Requer colunas 'idade', 'sexo' e 'faixa_etaria'.")
 
-with c4:
-    st.subheader("Raça/Cor × Sexo")
-    if {"etnia","sexo"}.issubset(base.columns):
-        df_etnia = (base.value_counts(["etnia","sexo"])
-                         .rename("cont").reset_index())
-        fig = px.bar(df_etnia, x="etnia", y="cont", color="sexo",
-                     barmode="group", text_auto=True)
-        fig.update_layout(
-            xaxis_title="Raça/Cor",
-            yaxis_title="Pacientes/Internações",
-            height=400,
-            margin=dict(t=40, b=80)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Requer colunas 'etnia' e 'sexo'.")
+# ========= COLUNA DO MEIO =========
+with col_meio:
+    st.subheader("Estado / Região de residência do paciente")
 
-# 3ª linha: Treemap + CID/Descrição
-c5, c6 = st.columns(2)
-
-with c5:
-    st.subheader("Distribuição geográfica (treemap)")
     if "cidade_moradia" in base.columns:
         df_geo = base.dropna(subset=["cidade_moradia"]).copy()
         df_geo["Pacientes/Internações"] = 1
 
-        # tentar hierarquia: Estado > Região de Saúde > Município
         estado_col = next((c for c in df_geo.columns if c.lower() in ["estado_residencia","uf_residencia","uf","estado","sigla_uf"]), None)
         regiao_col = next((c for c in df_geo.columns if "regiao" in c.lower() and "saude" in c.lower()), None)
 
@@ -465,26 +448,75 @@ with c5:
             values="Pacientes/Internações"
         )
         fig.update_layout(
-            height=450,
+            height=500,
             margin=dict(t=40, l=0, r=0, b=0)
         )
         st.plotly_chart(fig, use_container_width=True)
-        st.caption("Use os filtros de Estado / Região de saúde / Município para refinar o treemap.")
+        st.caption("Use os filtros de Estado / Região de saúde / Município para refinar a distribuição.")
     else:
         st.info("Coluna 'cidade_moradia' não encontrada.")
 
-with c6:
-    st.subheader("CID/Descrição (amostra)")
+    # Raça × Sexo (embaixo)
+    st.subheader("Raça/Cor × Sexo")
+    if {"etnia","sexo"}.issubset(base.columns):
+        df_etnia = (base.value_counts(["etnia","sexo"])
+                         .rename("cont").reset_index())
+        fig = px.bar(df_etnia, x="etnia", y="cont", color="sexo",
+                     barmode="group", text_auto=True)
+        fig.update_layout(
+            xaxis_title="Raça/Cor",
+            yaxis_title="Pacientes/Internações",
+            height=320,
+            margin=dict(t=40, b=80)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Requer colunas 'etnia' e 'sexo'.")
+
+# ========= COLUNA DIREITA =========
+with col_dir:
+    # Card grande de quantidade de pacientes, como no print
+    st.subheader("Quantidade de pacientes")
+    st.markdown(
+        f"<h2 style='text-align:center;'>{int(pacientes):,}</h2>".replace(",","."),
+        unsafe_allow_html=True
+    )
+    st.caption("Pacientes distintos no período filtrado")
+
+    st.markdown("---")
+
+    # Procedimentos (top N)
+    st.subheader("Procedimentos (amostra)")
+    proc_cols = [c for c in base.columns if "proc_nome_prim" in c or "procedimento" == c.lower()]
+    if proc_cols:
+        pcol = proc_cols[0]
+        top_proc = (base[pcol].dropna().astype(str)
+                    .value_counts().head(10).reset_index())
+        top_proc.columns = ["Procedimento", "Pacientes/Internações"]
+        fig = px.bar(top_proc, x="Procedimento", y="Pacientes/Internações", text_auto=True)
+        fig.update_layout(
+            xaxis_tickangle=-35,
+            height=260,
+            margin=dict(t=40, b=120)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Não encontrei coluna de procedimento agregada.")
+
+    st.markdown("---")
+
+    # Grupo / categorias CID-10
+    st.subheader("Grupo e categorias de CID-10 (amostra)")
     cid_col = [c for c in df_f.columns if ("cid" in c.lower() or "descricao" in c.lower() or "to_charsubstrievdescricao14000" in c.lower())]
     if cid_col:
-        col = cid_col[0]
-        top = (df_f[col].dropna().astype(str).str.upper().str[:50]
-               .value_counts().head(25).reset_index())
+        col_cid = cid_col[0]
+        top = (df_f[col_cid].dropna().astype(str).str.upper().str[:50]
+               .value_counts().head(10).reset_index())
         top.columns = ["CID/Descrição (amostra)", "Frequência"]
         fig = px.bar(top, x="CID/Descrição (amostra)", y="Frequência", text_auto=True)
         fig.update_layout(
             xaxis_tickangle=-35,
-            height=450,
+            height=260,
             margin=dict(t=40, b=120)
         )
         st.plotly_chart(fig, use_container_width=True)
