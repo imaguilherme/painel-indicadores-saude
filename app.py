@@ -249,9 +249,9 @@ def show_active_filters(f):
         partes.append("**Município:** " + ", ".join(f["cidade"]))
 
     if partes:
-        st.markdown("🔎 **Filtros ativos:** " + " | ".join(partes))
+        st.markdown("**Filtros ativos:** " + " | ".join(partes))
     else:
-        st.markdown("🔎 **Filtros ativos:** nenhum filtro aplicado.")
+        st.markdown("**Filtros ativos:** nenhum filtro aplicado.")
 
 # -------------------- UI: carregamento --------------------
 st.title("Perfil dos Pacientes")
