@@ -23,54 +23,98 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [c.lower() for c in df.columns]
 
-    # datas
-    for c in [
-        "data_internacao","data_alta","data_obito",
-        "dthr_valida","dt_entrada_cti","dt_saida_cti",
-        "data_cirurgia_min","data_cirurgia_max"
-    ]:
+    # ----------------- datas -----------------
+    date_cols = [
+        "data_internacao",
+        "data_alta",
+        "data_obito",
+        "dt_entrada_cti",
+        "dt_saida_cti",
+        "data_cirurgia_min",
+        "data_cirurgia_max",
+        "data_nascimento",
+        "dt_nascimento",
+        "data_nasc",
+        "dt_nasc",
+    ]
+    for c in date_cols:
         if c in df.columns:
-            df[c] = pd.to_datetime(df[c], errors="coerce")
+            df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
 
-    # numéricos
-    for c in ["idade","ano","ano_internacao"]:
+    # ----------------- numéricos básicos -----------------
+    for c in ["idade", "ano", "ano_internacao"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # sexo
+    # ----------------- idade: data de nascimento -> data internação/procedimento -----------------
+    birth_col = next(
+        (c for c in ["data_nascimento", "dt_nascimento", "data_nasc", "dt_nasc"]
+         if c in df.columns),
+        None
+    )
+    ref_col = next(
+        (c for c in ["data_internacao", "data_cirurgia_min", "data_cirurgia", "data_procedimento"]
+         if c in df.columns),
+        None
+    )
+
+    if birth_col and ref_col:
+        dob = pd.to_datetime(df[birth_col], errors="coerce", dayfirst=True)
+        ref = pd.to_datetime(df[ref_col], errors="coerce", dayfirst=True)
+        idade_anos = ((ref - dob).dt.days / 365.25).where(dob.notna() & ref.notna())
+        # anos completos (arredonda pra baixo)
+        df["idade"] = np.floor(idade_anos).astype("float")
+
+    # ----------------- sexo -----------------
     if "sexo" in df.columns:
         df["sexo"] = (
             df["sexo"].astype(str).str.strip().str.upper()
-              .replace({"M":"Masculino","F":"Feminino",
-                        "MASCULINO":"Masculino","FEMININO":"Feminino"})
+              .replace({
+                  "M": "Masculino",
+                  "F": "Feminino",
+                  "MASCULINO": "Masculino",
+                  "FEMININO": "Feminino",
+              })
         )
 
-    # derivar ano da internação, se não vier pronto
+    # ----------------- ano da internação -----------------
     if "data_internacao" in df.columns and "ano_internacao" not in df.columns:
         df["ano_internacao"] = df["data_internacao"].dt.year
 
-    # dias permanência
-    if {"data_internacao","data_alta"}.issubset(df.columns):
+    # ----------------- dias de permanência -----------------
+    if {"data_internacao", "data_alta"}.issubset(df.columns):
         df["dias_permanencia"] = (df["data_alta"] - df["data_internacao"]).dt.days
 
-    # faixas etárias
+    # ----------------- faixas etárias -----------------
     if "idade" in df.columns:
-        bins = [-1,0,4,11,17,24,34,44,54,64,74,84,120]
-        labels = ["<1","1–4","5–11","12–17","18–24",
-                  "25–34","35–44","45–54","55–64",
-                  "65–74","75–84","85+"]
+        bins = [-1, 0, 4, 11, 17, 24, 34, 44, 54, 64, 74, 84, 120]
+        labels = [
+            "<1", "1–4", "5–11", "12–17", "18–24",
+            "25–34", "35–44", "45–54", "55–64",
+            "65–74", "75–84", "85+",
+        ]
         df["faixa_etaria"] = pd.cut(
             pd.to_numeric(df["idade"], errors="coerce"),
-            bins=bins, labels=labels, right=True
+            bins=bins,
+            labels=labels,
+            right=True,
         )
 
-    # dedup de eventos (AIH)
-    keys = [c for c in ["codigo_internacao","prontuario_anonimo",
-                         "data_internacao","data_alta"] if c in df.columns]
+    # ----------------- deduplicação de eventos (AIH) -----------------
+    keys = [
+        c for c in [
+            "codigo_internacao",
+            "prontuario_anonimo",
+            "data_internacao",
+            "data_alta",
+        ]
+        if c in df.columns
+    ]
     if keys:
         df = df.drop_duplicates(subset=keys)
 
     return df
+
 
 @st.cache_data(show_spinner=False)
 def load_parquet(file):
