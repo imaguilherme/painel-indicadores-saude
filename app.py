@@ -86,19 +86,45 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
         df["dias_permanencia"] = (df["data_alta"] - df["data_internacao"]).dt.days
 
     # ----------------- faixas etárias -----------------
-    if "idade" in df.columns:
-        bins = [-1, 0, 4, 11, 17, 24, 34, 44, 54, 64, 74, 84, 120]
-        labels = [
-            "<1", "1–4", "5–11", "12–17", "18–24",
-            "25–34", "35–44", "45–54", "55–64",
-            "65–74", "75–84", "85+",
-        ]
-        df["faixa_etaria"] = pd.cut(
-            pd.to_numeric(df["idade"], errors="coerce"),
-            bins=bins,
-            labels=labels,
-            right=True,
-        )
+  if "idade" in df.columns:
+    bins = [
+        -1,
+        0,      # < 1 ano
+        8,      # 01 a 08 anos
+        17,     # 09 a 17 anos
+        26,     # 18 a 26 anos
+        35,     # 27 a 35 anos
+        44,     # 36 a 44 anos
+        53,     # 45 a 53 anos
+        62,     # 54 a 62 anos
+        71,     # 63 a 71 anos
+        80,     # 72 a 80 anos
+        89,     # 81 a 89 anos
+        200     # 90 anos ou mais
+    ]
+
+    labels = [
+        "< 1 ano",
+        "01 a 08 anos",
+        "09 a 17 anos",
+        "18 a 26 anos",
+        "27 a 35 anos",
+        "36 a 44 anos",
+        "45 a 53 anos",
+        "54 a 62 anos",
+        "63 a 71 anos",
+        "72 a 80 anos",
+        "81 a 89 anos",
+        "90 anos ou mais"
+    ]
+
+    df["faixa_etaria"] = pd.cut(
+        pd.to_numeric(df["idade"], errors="coerce"),
+        bins=bins,
+        labels=labels,
+        right=True,
+        include_lowest=True
+    
 
     # ----------------- deduplicação de eventos (AIH) -----------------
     keys = [
