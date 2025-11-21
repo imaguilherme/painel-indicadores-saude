@@ -734,74 +734,34 @@ with col_esq:
 
 # ========= COLUNA DO MEIO =========
 with col_meio:
-    st.subheader("Estado / Região de saúde / Município de residência")
+    st.subheader("Estado → Região de Saúde → Município de residência")
 
-    if "cidade_moradia" in base.columns:
+    # Só plota se tivermos as 3 colunas-chave
+    if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base.columns):
         df_geo_plot = base.dropna(subset=["cidade_moradia"]).copy()
         df_geo_plot["Pacientes/Internações"] = 1
 
-        # 1) Detecta coluna de ESTADO (UF) em ordem de preferência
-        estado_candidatos = [
-            "uf", "sg_uf", "estado_residencia", "uf_residencia",
-            "estado", "sigla_uf"
-        ]
-        estado_col = next(
-            (c for c in estado_candidatos if c in df_geo_plot.columns),
-            None
-        )
-
-        # 2) Detecta coluna de REGIÃO DE SAÚDE
-        regiao_candidatos = [
-            "regiao_saude", "no_cir_padrao", "nome_regiao_saude"
-        ]
-        # também tenta achar algo genérico com 'regiao' e 'saude' no nome
-        regiao_col = next(
-            (c for c in regiao_candidatos if c in df_geo_plot.columns),
-            None
-        )
-        if regiao_col is None:
-            regiao_col = next(
-                (
-                    c for c in df_geo_plot.columns
-                    if "regiao" in c.lower() and "saud" in c.lower()
-                ),
-                None
-            )
-
-        # 3) Monta hierarquia do treemap
-        path_cols = []
-        if estado_col:
-            path_cols.append(estado_col)
-        if regiao_col:
-            path_cols.append(regiao_col)
-        path_cols.append("cidade_moradia")  # sempre último nível
-
         fig = px.treemap(
             df_geo_plot,
-            path=path_cols,
-            values="Pacientes/Internações"
+            path=["uf", "regiao_saude", "cidade_moradia"],
+            values="Pacientes/Internações",
         )
         fig.update_layout(
             height=550,
             margin=dict(t=40, l=0, r=0, b=0)
         )
         st.plotly_chart(fig, use_container_width=True)
-
-        # Mensagem explicando se tem ou não região
-        if regiao_col is None:
-            st.caption(
-                "Treemap em nível Estado → Município. "
-                "Para ver as Regiões de Saúde, carregue a tabela de regiões no painel "
-                "('UF_Macro_Região_Município.csv')."
-            )
-        else:
-            st.caption(
-                "Treemap em nível Estado → Região de Saúde → Município. "
-                "Use os filtros de Estado / Região de Saúde / Município para refinar a distribuição."
-            )
-
+        st.caption(
+            "Hierarquia: Estado → Região de Saúde → Município. "
+            "Refine usando os filtros de Estado / Região de Saúde / Município."
+        )
     else:
-        st.info("Coluna 'cidade_moradia' não encontrada.")
+        st.error(
+            "Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não estão disponíveis.\n\n"
+            "Verifique se o arquivo de Regiões/Macrorregiões de Saúde foi carregado no painel "
+            "e se o enriquecimento geográfico está habilitado."
+        )
+
 
     # Raça × Sexo
     st.subheader("Raça/Cor × Sexo")
