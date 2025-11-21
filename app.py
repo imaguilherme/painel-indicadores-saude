@@ -251,14 +251,16 @@ def enrich_with_aux_tables(df: pd.DataFrame,
         except Exception as e:
             st.warning(f"Não foi possível enriquecer com SIGTAP: {e}")
 
-    # -------- Geografia (UF / Macro / Região de Saúde) --------
+       # -------- Geografia (UF / Macro / Região de Saúde) --------
     if geo_file is not None:
         try:
             geo_df = pd.read_csv(geo_file, dtype=str)
             geo_df.columns = [c.lower() for c in geo_df.columns]
 
             # esperamos colunas: sg_uf, no_macrorregional, no_cir_padrao, no_municipio
-            if "cidade_moradia" in df_enriched.columns and "no_municipio" in geo_df.columns:
+            if "cidade_moradia" in df_enriched.columns and \
+               {"no_municipio", "sg_uf"}.issubset(geo_df.columns):
+
                 # CIDADE_MORADIA está no formato "cidade, UF"
                 partes = df_enriched["cidade_moradia"].astype(str).str.split(",", n=1, expand=True)
                 df_enriched["cidade_nome_norm"] = partes[0].str.upper().str.strip()
@@ -270,31 +272,30 @@ def enrich_with_aux_tables(df: pd.DataFrame,
                 geo_df["no_municipio_norm"] = (
                     geo_df["no_municipio"].astype(str).str.upper().str.strip()
                 )
+                geo_df["sg_uf"] = geo_df["sg_uf"].astype(str).str.upper().str.strip()
 
-                cols_keep = []
-                for c in ["no_municipio_norm", "sg_uf", "no_macrorregional", "no_cir_padrao"]:
-                    if c in geo_df.columns:
-                        cols_keep.append(c)
-                geo_small = geo_df[cols_keep].drop_duplicates(subset=["no_municipio_norm"])
+                # reduz para as colunas que vamos usar
+                geo_small = geo_df[[
+                    "no_municipio_norm", "sg_uf",
+                    "no_macrorregional", "no_cir_padrao"
+                ]].drop_duplicates(subset=["no_municipio_norm", "sg_uf"])
 
+                # 🔐 merge por CIDADE + UF
                 df_enriched = df_enriched.merge(
                     geo_small,
                     how="left",
-                    left_on="cidade_nome_norm",
-                    right_on="no_municipio_norm"
+                    left_on=["cidade_nome_norm", "uf_from_cidade"],
+                    right_on=["no_municipio_norm", "sg_uf"]
                 )
 
-                rename_map = {}
-                if "sg_uf" in df_enriched.columns:
-                    rename_map["sg_uf"] = "uf"
-                if "no_macrorregional" in df_enriched.columns:
-                    rename_map["no_macrorregional"] = "macroregiao"
-                if "no_cir_padrao" in df_enriched.columns:
-                    rename_map["no_cir_padrao"] = "regiao_saude"
+                # renomeia para nomes mais amigáveis no painel
+                df_enriched = df_enriched.rename(columns={
+                    "sg_uf": "uf",
+                    "no_macrorregional": "macroregiao",
+                    "no_cir_padrao": "regiao_saude",
+                })
 
-                if rename_map:
-                    df_enriched = df_enriched.rename(columns=rename_map)
-
+                # limpa colunas auxiliares
                 df_enriched = df_enriched.drop(
                     columns=["cidade_nome_norm", "no_municipio_norm"],
                     errors="ignore"
