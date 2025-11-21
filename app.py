@@ -81,9 +81,11 @@ def load_duckdb(csv_paths):
     """
     Registra 3 CSVs (EVOLUCOES, PROCED, CIDS/UTI) e cria view dataset unificada (lazy).
 
-    Ajustes para o DuckDB do Streamlit:
-    - Não usa mais parâmetros `?` dentro do read_csv_auto.
-    - Usa `delim=';'` e `sample_size=-1`.
+    Ajustes:
+    - Usa read_csv_auto apenas com o caminho (sem parâmetros nomeados),
+      para evitar InvalidInputException na versão do DuckDB do Streamlit.
+    - Normaliza PRONTUARIO_ANONIMO em todas as views.
+    - Procedimentos agregados por PRONTUARIO_ANONIMO.
     """
     con = duckdb.connect(database=":memory:")
     evo, proc, cti = csv_paths
@@ -94,12 +96,7 @@ def load_duckdb(csv_paths):
         sql = f"""
             CREATE VIEW {view_name} AS
             SELECT *
-            FROM read_csv_auto(
-                '{path_esc}',
-                delim=';',
-                header=True,
-                sample_size=-1
-            );
+            FROM read_csv_auto('{path_esc}');
         """
         con.execute(sql)
 
@@ -108,43 +105,57 @@ def load_duckdb(csv_paths):
     make_view("proced", proc)
     make_view("cids", cti)
 
-    # normaliza chaves para lower/trim e agrega procedimentos para não explodir cardinalidade
+    # normaliza chaves para lower/trim
     con.execute("""
         CREATE VIEW evolu_n AS
         SELECT
-          lower(trim(prontuario_anonimo)) AS prontuario_anonimo,
-          lower(trim(codigo_internacao))  AS codigo_internacao,
+          lower(trim(CAST(PRONTUARIO_ANONIMO AS VARCHAR))) AS prontuario_anonimo,
           *
         FROM evolu;
 
         CREATE VIEW cids_n AS
         SELECT
-          lower(trim(prontuario_anonimo)) AS prontuario_anonimo,
-          lower(trim(codigo_internacao))  AS codigo_internacao,
+          lower(trim(CAST(PRONTUARIO_ANONIMO AS VARCHAR))) AS prontuario_anonimo,
           *
         FROM cids;
 
+        CREATE VIEW proc_n AS
+        SELECT
+          lower(trim(CAST(PRONTUARIO_ANONIMO AS VARCHAR))) AS prontuario_anonimo,
+          *
+        FROM proced;
+    """)
+
+    # Procedimentos agregados POR PRONTUARIO_ANONIMO (chave comum)
+    con.execute("""
         CREATE VIEW proc_agg AS
         SELECT
-          lower(trim(codigo_internacao)) AS codigo_internacao,
-          COUNT(DISTINCT codigo_procedimento) AS n_proced,
-          ANY_VALUE(codigo_procedimento)      AS proc_prim,
-          ANY_VALUE(procedimento)             AS proc_nome_prim,
-          MIN(COALESCE(data_cirurgia, data_internacao)) AS data_cirurgia_min,
-          MAX(COALESCE(data_cirurgia, data_internacao)) AS data_cirurgia_max
-        FROM proced
-        GROUP BY 1;
+          prontuario_anonimo,
+          COUNT(DISTINCT CODIGO_PROCEDIMENTO)           AS n_proced,
+          ANY_VALUE(CODIGO_PROCEDIMENTO)                AS proc_prim,
+          ANY_VALUE(PROCEDIMENTO)                       AS proc_nome_prim,
+          MIN(COALESCE(DATA_CIRURGIA, DATA_INTERNACAO)) AS data_cirurgia_min,
+          MAX(COALESCE(DATA_CIRURGIA, DATA_INTERNACAO)) AS data_cirurgia_max
+        FROM proc_n
+        GROUP BY prontuario_anonimo;
+    """)
 
+    # Dataset final:
+    # - EVOLU + CIDS: juntando por prontuario_anonimo
+    # - PROCED: anexado por prontuario_anonimo
+    con.execute("""
         CREATE VIEW dataset AS
         SELECT
           e.*,
-          c.* EXCLUDE (codigo_internacao, prontuario_anonimo),
+          c.* EXCLUDE (prontuario_anonimo),
           p.*
         FROM evolu_n e
-        LEFT JOIN cids_n  c USING (codigo_internacao, prontuario_anonimo)
-        LEFT JOIN proc_agg p USING (codigo_internacao);
+        LEFT JOIN cids_n  c USING (prontuario_anonimo)
+        LEFT JOIN proc_agg p USING (prontuario_anonimo);
     """)
+
     return con
+
 
 
 def df_from_duckdb(con, sql):
