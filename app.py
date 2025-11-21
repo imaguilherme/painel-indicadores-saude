@@ -22,30 +22,56 @@ def _to_dt(s):
 def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [c.lower() for c in df.columns]
+
     # datas
-    for c in ["data_internacao","data_alta","data_obito","dthr_valida","dt_entrada_cti","dt_saida_cti","data_cirurgia_min","data_cirurgia_max"]:
+    for c in [
+        "data_internacao","data_alta","data_obito",
+        "dthr_valida","dt_entrada_cti","dt_saida_cti",
+        "data_cirurgia_min","data_cirurgia_max"
+    ]:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce")
+
     # numéricos
     for c in ["idade","ano","ano_internacao"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
+
     # sexo
     if "sexo" in df.columns:
-        df["sexo"] = (df["sexo"].astype(str).str.strip().str.upper()
-                      .replace({"M":"Masculino","F":"Feminino","MASCULINO":"Masculino","FEMININO":"Feminino"}))
+        df["sexo"] = (
+            df["sexo"].astype(str).str.strip().str.upper()
+              .replace({
+                  "M":"Masculino","F":"Feminino",
+                  "MASCULINO":"Masculino","FEMININO":"Feminino"
+              })
+        )
+
+    # derivar ano da internação, se não vier pronto
+    if "data_internacao" in df.columns and "ano_internacao" not in df.columns:
+        df["ano_internacao"] = df["data_internacao"].dt.year
+
     # dias permanência
     if {"data_internacao","data_alta"}.issubset(df.columns):
         df["dias_permanencia"] = (df["data_alta"] - df["data_internacao"]).dt.days
+
     # faixas etárias
     if "idade" in df.columns:
         bins = [-1,0,4,11,17,24,34,44,54,64,74,84,120]
-        labels = ["<1","1–4","5–11","12–17","18–24","25–34","35–44","45–54","55–64","65–74","75–84","85+"]
-        df["faixa_etaria"] = pd.cut(pd.to_numeric(df["idade"], errors="coerce"), bins=bins, labels=labels, right=True)
+        labels = ["<1","1–4","5–11","12–17","18–24",
+                  "25–34","35–44","45–54","55–64",
+                  "65–74","75–84","85+"]
+        df["faixa_etaria"] = pd.cut(
+            pd.to_numeric(df["idade"], errors="coerce"),
+            bins=bins, labels=labels, right=True
+        )
+
     # dedup de eventos (AIH)
-    keys = [c for c in ["codigo_internacao","prontuario_anonimo","data_internacao","data_alta"] if c in df.columns]
+    keys = [c for c in ["codigo_internacao","prontuario_anonimo",
+                         "data_internacao","data_alta"] if c in df.columns]
     if keys:
         df = df.drop_duplicates(subset=keys)
+
     return df
 
 @st.cache_data(show_spinner=False)
@@ -54,49 +80,80 @@ def load_parquet(file):
 
 @st.cache_resource(show_spinner=False)
 def load_duckdb(csv_paths):
-    """Registra 3 CSVs (EVOLUCOES, PROCED, CIDS/UTI) e cria view dataset unificada (lazy)."""
+    """
+    Registra 3 CSVs (EVOLUCOES, PROCED, CIDS/UTI) e cria view dataset unificada (lazy).
+
+    Ajustes:
+    - Detecção automática de separador (read_csv_auto sem 'sep').
+    - Normalização de PRONTUARIO_ANONIMO e CODIGO_INTERNACAO.
+    - Procedimentos agregados por PRONTUARIO_ANONIMO (chave comum entre tabelas).
+    """
     con = duckdb.connect(database=":memory:")
     evo, proc, cti = csv_paths
-    con.execute("CREATE VIEW evolu AS SELECT * FROM read_csv_auto(?, sep=';', header=True, SAMPLE_SIZE=-1);", [evo])
-    con.execute("CREATE VIEW proced AS SELECT * FROM read_csv_auto(?, sep=';', header=True, SAMPLE_SIZE=-1);", [proc])
-    con.execute("CREATE VIEW cids AS SELECT * FROM read_csv_auto(?, sep=';', header=True, SAMPLE_SIZE=-1);", [cti])
 
-    # normaliza chaves para lower/trim e agrega procedimentos para não explodir cardinalidade
+    # Deixa o DuckDB detectar sep/encoding automaticamente
+    con.execute("""
+        CREATE VIEW evolu AS
+        SELECT * FROM read_csv_auto(?, header=True, SAMPLE_SIZE=-1);
+    """, [evo])
+
+    con.execute("""
+        CREATE VIEW proced AS
+        SELECT * FROM read_csv_auto(?, header=True, SAMPLE_SIZE=-1);
+    """, [proc])
+
+    con.execute("""
+        CREATE VIEW cids AS
+        SELECT * FROM read_csv_auto(?, header=True, SAMPLE_SIZE=-1);
+    """, [cti])
+
+    # normaliza chaves para lower/trim
     con.execute("""
         CREATE VIEW evolu_n AS
         SELECT
-          lower(trim(prontuario_anonimo)) AS prontuario_anonimo,
-          lower(trim(codigo_internacao)) AS codigo_internacao,
+          lower(trim(CAST(PRONTUARIO_ANONIMO AS VARCHAR))) AS prontuario_anonimo,
+          lower(trim(CAST(CODIGO_INTERNACAO AS VARCHAR)))   AS codigo_internacao,
           *
         FROM evolu;
+    """)
 
+    con.execute("""
         CREATE VIEW cids_n AS
         SELECT
-          lower(trim(prontuario_anonimo)) AS prontuario_anonimo,
-          lower(trim(codigo_internacao)) AS codigo_internacao,
+          lower(trim(CAST(PRONTUARIO_ANONIMO AS VARCHAR))) AS prontuario_anonimo,
+          lower(trim(CAST(CODIGO_INTERNACAO AS VARCHAR)))   AS codigo_internacao,
           *
         FROM cids;
+    """)
 
+    # Procedimentos agregados POR PRONTUARIO_ANONIMO (chave comum)
+    con.execute("""
         CREATE VIEW proc_agg AS
         SELECT
-          lower(trim(codigo_internacao)) AS codigo_internacao,
-          COUNT(DISTINCT codigo_procedimento) AS n_proced,
-          ANY_VALUE(codigo_procedimento) AS proc_prim,
-          ANY_VALUE(procedimento) AS proc_nome_prim,
-          MIN(COALESCE(data_cirurgia, data_internacao)) AS data_cirurgia_min,
-          MAX(COALESCE(data_cirurgia, data_internacao)) AS data_cirurgia_max
+          lower(trim(CAST(PRONTUARIO_ANONIMO AS VARCHAR))) AS prontuario_anonimo,
+          COUNT(DISTINCT CODIGO_PROCEDIMENTO)              AS n_proced,
+          ANY_VALUE(CODIGO_PROCEDIMENTO)                   AS proc_prim,
+          ANY_VALUE(PROCEDIMENTO)                          AS proc_nome_prim,
+          MIN(COALESCE(DATA_CIRURGIA, DATA_INTERNACAO))    AS data_cirurgia_min,
+          MAX(COALESCE(DATA_CIRURGIA, DATA_INTERNACAO))    AS data_cirurgia_max
         FROM proced
         GROUP BY 1;
+    """)
 
+    # Dataset final:
+    # - EVOLU + CIDS: ainda usando (prontuario_anonimo, codigo_internacao) para não explodir internações
+    # - PROCED: anexado por prontuario_anonimo (chave que liga as tabelas)
+    con.execute("""
         CREATE VIEW dataset AS
         SELECT
           e.*,
-          c.* EXCLUDE (codigo_internacao, prontuario_anonimo),
+          c.* EXCLUDE (PRONTUARIO_ANONIMO, CODIGO_INTERNACAO),
           p.*
         FROM evolu_n e
-        LEFT JOIN cids_n c USING (codigo_internacao, prontuario_anonimo)
-        LEFT JOIN proc_agg p USING (codigo_internacao);
+        LEFT JOIN cids_n  c USING (prontuario_anonimo, codigo_internacao)
+        LEFT JOIN proc_agg p USING (prontuario_anonimo);
     """)
+
     return con
 
 def df_from_duckdb(con, sql):
@@ -105,55 +162,99 @@ def df_from_duckdb(con, sql):
 # -------------------- funções de base --------------------
 def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
     if {"prontuario_anonimo","data_internacao"}.issubset(df.columns):
-        return (df.sort_values(["prontuario_anonimo","data_internacao"])
-                  .groupby("prontuario_anonimo", as_index=False).tail(1))
+        return (
+            df.sort_values(["prontuario_anonimo","data_internacao"])
+              .groupby("prontuario_anonimo", as_index=False)
+              .tail(1)
+        )
     if "prontuario_anonimo" in df.columns:
         return df.drop_duplicates(subset=["prontuario_anonimo"])
     return df
 
 def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
-    pacientes = df_pacientes["prontuario_anonimo"].nunique() if "prontuario_anonimo" in df_pacientes else np.nan
-    internacoes = df_eventos["codigo_internacao"].nunique() if "codigo_internacao" in df_eventos else len(df_eventos)
-    tmi = df_eventos["dias_permanencia"].replace([np.inf,-np.inf], np.nan).dropna().mean() if "dias_permanencia" in df_eventos else np.nan
+    pacientes = (
+        df_pacientes["prontuario_anonimo"].nunique()
+        if "prontuario_anonimo" in df_pacientes else np.nan
+    )
+    internacoes = (
+        df_eventos["codigo_internacao"].nunique()
+        if "codigo_internacao" in df_eventos else len(df_eventos)
+    )
+    tmi = (
+        df_eventos["dias_permanencia"]
+          .replace([np.inf,-np.inf], np.nan)
+          .dropna().mean()
+        if "dias_permanencia" in df_eventos else np.nan
+    )
 
     mort_hosp = np.nan
     if {"data_internacao","data_alta"}.issubset(df_eventos.columns):
         e = df_eventos.copy()
         if "data_obito" in e.columns:
-            e["obito_no_periodo"] = (e["data_obito"].notna()) & \
-                (e["data_obito"] >= e["data_internacao"]) & \
+            e["obito_no_periodo"] = (
+                (e["data_obito"].notna()) &
+                (e["data_obito"] >= e["data_internacao"]) &
                 (e["data_obito"] <= (e["data_alta"] - pd.Timedelta(days=1)))
+            )
         elif "evolucao" in e.columns:
-            e["obito_no_periodo"] = e["evolucao"].astype(str).str.contains("ÓBITO", case=False, na=False)
+            e["obito_no_periodo"] = e["evolucao"].astype(str).str.contains(
+                "ÓBITO", case=False, na=False
+            )
         else:
             e["obito_no_periodo"] = False
-        denom = e["codigo_internacao"].nunique() if "codigo_internacao" in e else len(e)
+
+        denom = (
+            e["codigo_internacao"].nunique()
+            if "codigo_internacao" in e else len(e)
+        )
         numer = e.loc[e["obito_no_periodo"]]
-        numer = numer["codigo_internacao"].nunique() if "codigo_internacao" in e else len(numer)
+        numer = (
+            numer["codigo_internacao"].nunique()
+            if "codigo_internacao" in e else len(numer)
+        )
         mort_hosp = (numer/denom*100) if denom else np.nan
+
     return pacientes, internacoes, tmi, mort_hosp
 
 def reinternacao_30d_pos_proced(df: pd.DataFrame):
-    ok = {"prontuario_anonimo","codigo_internacao","data_internacao","data_alta"}.issubset(df.columns)
+    ok = {"prontuario_anonimo","codigo_internacao",
+          "data_internacao","data_alta"}.issubset(df.columns)
     if not ok: return np.nan
-    s = df.sort_values(["prontuario_anonimo","data_internacao","data_alta"]).copy()
-    s["next_dt_internacao"] = s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
-    s["delta_proc"] = (s["next_dt_internacao"] - s["data_internacao"]).dt.days
-    s["delta_pos_alta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
+    s = df.sort_values(
+        ["prontuario_anonimo","data_internacao","data_alta"]
+    ).copy()
+    s["next_dt_internacao"] = (
+        s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
+    )
+    s["delta_proc"] = (
+        s["next_dt_internacao"] - s["data_internacao"]
+    ).dt.days
+    s["delta_pos_alta"] = (
+        s["next_dt_internacao"] - s["data_alta"]
+    ).dt.days
     s["transfer"] = s["delta_pos_alta"] <= 1
     base = s["codigo_internacao"].nunique()
-    numer = s[(s["delta_proc"].between(0,30, inclusive="both")) & (~s["transfer"])]["codigo_internacao"].nunique()
+    numer = s[
+        s["delta_proc"].between(0,30, inclusive="both") & (~s["transfer"])
+    ]["codigo_internacao"].nunique()
     return (numer/base*100) if base else np.nan
 
 def reinternacao_30d_pos_alta(df: pd.DataFrame):
-    ok = {"prontuario_anonimo","codigo_internacao","data_internacao","data_alta"}.issubset(df.columns)
+    ok = {"prontuario_anonimo","codigo_internacao",
+          "data_internacao","data_alta"}.issubset(df.columns)
     if not ok: return np.nan
-    s = df.sort_values(["prontuario_anonimo","data_internacao","data_alta"]).copy()
-    s["next_dt_internacao"] = s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
+    s = df.sort_values(
+        ["prontuario_anonimo","data_internacao","data_alta"]
+    ).copy()
+    s["next_dt_internacao"] = (
+        s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
+    )
     s["delta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
     s["transfer"] = s["delta"] <= 1
     base = s["codigo_internacao"].nunique()
-    numer = s[(s["delta"].between(0,30, inclusive="both")) & (~s["transfer"])]["codigo_internacao"].nunique()
+    numer = s[
+        s["delta"].between(0,30, inclusive="both") & (~s["transfer"])
+    ]["codigo_internacao"].nunique()
     return (numer/base*100) if base else np.nan
 
 # -------------------- filtros e indicadores --------------------
@@ -161,7 +262,10 @@ def build_filters(df: pd.DataFrame):
     st.sidebar.header("Filtros")
 
     # ano
-    anos_col = "ano_internacao" if "ano_internacao" in df.columns else ("ano" if "ano" in df.columns else None)
+    anos_col = (
+        "ano_internacao" if "ano_internacao" in df.columns
+        else ("ano" if "ano" in df.columns else None)
+    )
     if anos_col:
         anos = sorted(df[anos_col].dropna().unique().tolist())
     else:
@@ -173,32 +277,51 @@ def build_filters(df: pd.DataFrame):
         idade_min, idade_max = int(np.nanmin(df["idade"])), int(np.nanmax(df["idade"]))
     else:
         idade_min, idade_max = 0, 120
-    idade_sel = st.sidebar.slider("Idade", min_value=0, max_value=max(idade_max,1),
-                                  value=(idade_min, idade_max), step=1)
+    idade_sel = st.sidebar.slider(
+        "Idade", min_value=0, max_value=max(idade_max,1),
+        value=(idade_min, idade_max), step=1
+    )
 
     # estado (se existir)
-    estado_col = next((c for c in df.columns if c.lower() in ["estado_residencia","uf_residencia","uf","estado","sigla_uf"]), None)
+    estado_col = next(
+        (c for c in df.columns if c.lower() in
+         ["estado_residencia","uf_residencia","uf","estado","sigla_uf"]),
+        None
+    )
     estados_sel = []
     if estado_col:
         estados = sorted(df[estado_col].dropna().astype(str).unique().tolist())
-        estados_sel = st.sidebar.multiselect("Estado de residência", estados, default=estados)
+        estados_sel = st.sidebar.multiselect(
+            "Estado de residência", estados, default=estados
+        )
 
     # região de saúde (se existir)
-    regiao_col = next((c for c in df.columns if "regiao" in c.lower() and "saude" in c.lower()), None)
+    regiao_col = next(
+        (c for c in df.columns
+         if "regiao" in c.lower() and "saude" in c.lower()),
+        None
+    )
     regioes_sel = []
     if regiao_col:
         regioes = sorted(df[regiao_col].dropna().astype(str).unique().tolist())
-        regioes_sel = st.sidebar.multiselect("Região de saúde", regioes, default=regioes)
+        regioes_sel = st.sidebar.multiselect(
+            "Região de saúde", regioes, default=regioes
+        )
 
     # município de residência (lista baseada em pacientes únicos)
     df_pac_ref = pacientes_unicos(df)
     cidade_col = "cidade_moradia" if "cidade_moradia" in df_pac_ref.columns else None
     cidades_sel = []
     if cidade_col:
-        cidade_vals = sorted(df_pac_ref[cidade_col].dropna().astype(str).unique().tolist())
-        # limitar default pra não ficar gigante
-        default_cidades = cidade_vals if len(cidade_vals) <= 25 else cidade_vals[:25]
-        cidades_sel = st.sidebar.multiselect("Município de residência", cidade_vals, default=default_cidades)
+        cidade_vals = sorted(
+            df_pac_ref[cidade_col].dropna().astype(str).unique().tolist()
+        )
+        default_cidades = (
+            cidade_vals if len(cidade_vals) <= 25 else cidade_vals[:25]
+        )
+        cidades_sel = st.sidebar.multiselect(
+            "Município de residência", cidade_vals, default=default_cidades
+        )
 
     return {
         "ano": ano_sel,
@@ -217,15 +340,26 @@ def apply_filters(df, f):
 
     # idade
     if "idade" in df.columns and f["idade"]:
-        df = df[(df["idade"] >= f["idade"][0]) & (df["idade"] <= f["idade"][1])]
+        df = df[
+            (df["idade"] >= f["idade"][0]) &
+            (df["idade"] <= f["idade"][1])
+        ]
 
     # estado
-    estado_col = next((c for c in df.columns if c.lower() in ["estado_residencia","uf_residencia","uf","estado","sigla_uf"]), None)
+    estado_col = next(
+        (c for c in df.columns if c.lower() in
+         ["estado_residencia","uf_residencia","uf","estado","sigla_uf"]),
+        None
+    )
     if estado_col and f["estado"]:
         df = df[df[estado_col].isin(f["estado"])]
 
     # região de saúde
-    regiao_col = next((c for c in df.columns if "regiao" in c.lower() and "saude" in c.lower()), None)
+    regiao_col = next(
+        (c for c in df.columns
+         if "regiao" in c.lower() and "saude" in c.lower()),
+        None
+    )
     if regiao_col and f["regiao"]:
         df = df[df[regiao_col].isin(f["regiao"])]
 
@@ -260,7 +394,10 @@ tab_parquet, tab_csv = st.tabs(["Parquet único (recomendado)", "3 CSVs grandes 
 
 df = None
 with tab_parquet:
-    file_parquet = st.file_uploader("Carregue o Parquet único (dataset_unico_2019_2025.parquet)", type=["parquet"], key="pq")
+    file_parquet = st.file_uploader(
+        "Carregue o Parquet único (dataset_unico_2019_2025.parquet)",
+        type=["parquet"], key="pq"
+    )
     if file_parquet:
         df = load_parquet(file_parquet)
 
@@ -271,11 +408,10 @@ with tab_csv:
     cti = c3.file_uploader("CIDs/UTI (csv)", type=["csv"], key="cti")
     if evo and proc and cti:
         tmpdir = tempfile.mkdtemp()
-        p_evo = os.path.join(tmpdir, "evo.csv"); open(p_evo, "wb").write(evo.getbuffer())
+        p_evo = os.path.join(tmpdir, "evo.csv");  open(p_evo,  "wb").write(evo.getbuffer())
         p_proc = os.path.join(tmpdir, "proc.csv"); open(p_proc, "wb").write(proc.getbuffer())
-        p_cti = os.path.join(tmpdir, "cti.csv"); open(p_cti, "wb").write(cti.getbuffer())
+        p_cti = os.path.join(tmpdir, "cti.csv");  open(p_cti,  "wb").write(cti.getbuffer())
         con = load_duckdb((p_evo, p_proc, p_cti))
-        # materializa um recorte inicial para filtros/gráficos; consultas adicionais podem ser puxadas conforme necessidade
         df = df_from_duckdb(con, "SELECT * FROM dataset")
         df = _post_load(df)
 
@@ -285,15 +421,18 @@ if df is None or df.empty:
 
 # -------------------- filtros e bases --------------------
 f = build_filters(df)
-df_f = apply_filters(df, f)                 # eventos (AIHs) filtrados
-df_pac = pacientes_unicos(df_f)            # 1 linha por paciente filtrado
+df_f = apply_filters(df, f)          # eventos (AIHs) filtrados
+df_pac = pacientes_unicos(df_f)     # 1 linha por paciente filtrado
 
 # mostra filtros ativos no corpo da página
 show_active_filters(f)
 st.divider()
 
 # toggle de análise
-modo_perfil = st.toggle("Contar por **paciente único** (perfil). Desative para **internações**.", value=True)
+modo_perfil = st.toggle(
+    "Contar por **paciente único** (perfil). Desative para **internações**.",
+    value=True
+)
 base = df_pac if modo_perfil else df_f
 
 # -------------------- KPIs --------------------
@@ -302,12 +441,18 @@ ri_proc = reinternacao_30d_pos_proced(df_f)
 ri_alta = reinternacao_30d_pos_alta(df_f)
 
 k1,k2,k3,k4,k5,k6 = st.columns(6)
-k1.metric("Pacientes (distintos)", f"{int(pacientes):,}".replace(",",".") if pd.notna(pacientes) else "—")
-k2.metric("Internações", f"{int(internacoes):,}".replace(",",".") if pd.notna(internacoes) else "—")
-k3.metric("Tempo médio de internação (dias)", f"{tmi:.1f}" if pd.notna(tmi) else "—")
-k4.metric("Reinternação 30d (procedimento)", f"{ri_proc:.1f}%" if pd.notna(ri_proc) else "—")
-k5.metric("Reinternação 30d (alta)", f"{ri_alta:.1f}%" if pd.notna(ri_alta) else "—")
-k6.metric("Mortalidade hospitalar", f"{mort_hosp:.1f}%" if pd.notna(mort_hosp) else "—")
+k1.metric("Pacientes (distintos)",
+          f"{int(pacientes):,}".replace(",",".") if pd.notna(pacientes) else "—")
+k2.metric("Internações",
+          f"{int(internacoes):,}".replace(",",".") if pd.notna(internacoes) else "—")
+k3.metric("Tempo médio de internação (dias)",
+          f"{tmi:.1f}" if pd.notna(tmi) else "—")
+k4.metric("Reinternação 30d (procedimento)",
+          f"{ri_proc:.1f}%" if pd.notna(ri_proc) else "—")
+k5.metric("Reinternação 30d (alta)",
+          f"{ri_alta:.1f}%" if pd.notna(ri_alta) else "—")
+k6.metric("Mortalidade hospitalar",
+          f"{mort_hosp:.1f}%" if pd.notna(mort_hosp) else "—")
 
 st.divider()
 
@@ -321,7 +466,10 @@ indicador_top = st.radio(
     key="ind_top"
 )
 
-ano_col = "ano_internacao" if "ano_internacao" in df_f.columns else ("ano" if "ano" in df_f.columns else None)
+ano_col = (
+    "ano_internacao" if "ano_internacao" in df_f.columns
+    else ("ano" if "ano" in df_f.columns else None)
+)
 
 if ano_col:
     df_year = df_f[~df_f[ano_col].isna()].copy()
@@ -381,7 +529,10 @@ with col_esq:
     with c2:
         # Caráter de atendimento (se existir)
         carater_col = None
-        for cand in ["carater_atendimento","caracter_atendimento","carater","caráter_atendimento","carater_atend"]:
+        for cand in [
+            "carater_atendimento","caracter_atendimento","carater",
+            "caráter_atendimento","carater_atend"
+        ]:
             if cand in df_f.columns:
                 carater_col = cand
                 break
@@ -390,8 +541,10 @@ with col_esq:
         if carater_col:
             ordem = df_f[carater_col].value_counts().index.tolist()
             df_car = df_f.value_counts(carater_col).rename("cont").reset_index()
-            fig = px.bar(df_car, x=carater_col, y="cont", text_auto=True,
-                         category_orders={carater_col: ordem})
+            fig = px.bar(
+                df_car, x=carater_col, y="cont", text_auto=True,
+                category_orders={carater_col: ordem}
+            )
             fig.update_layout(
                 height=230,
                 xaxis_title="",
@@ -401,11 +554,14 @@ with col_esq:
         else:
             st.info("Coluna de 'caráter do atendimento' não encontrada.")
 
-    # Pirâmide etária (abaixo, ocupando a largura toda da coluna)
+    # Pirâmide etária
     st.subheader("Pirâmide etária")
     if {"idade","sexo","faixa_etaria"}.issubset(base.columns):
-        tmp = (base.dropna(subset=["faixa_etaria","sexo"])
-                    .groupby(["faixa_etaria","sexo"]).size().reset_index(name="n"))
+        tmp = (
+            base.dropna(subset=["faixa_etaria","sexo"])
+                .groupby(["faixa_etaria","sexo"])
+                .size().reset_index(name="n")
+        )
         male = tmp[tmp["sexo"].eq("Masculino")].set_index("faixa_etaria")["n"].reindex(
             base["faixa_etaria"].cat.categories, fill_value=0
         )
@@ -413,8 +569,14 @@ with col_esq:
             base["faixa_etaria"].cat.categories, fill_value=0
         )
         fig = go.Figure()
-        fig.add_bar(y=male.index.astype(str), x=-male.values, name="Masculino", orientation="h")
-        fig.add_bar(y=female.index.astype(str), x=female.values, name="Feminino", orientation="h")
+        fig.add_bar(
+            y=male.index.astype(str), x=-male.values,
+            name="Masculino", orientation="h"
+        )
+        fig.add_bar(
+            y=female.index.astype(str), x=female.values,
+            name="Feminino", orientation="h"
+        )
         fig.update_layout(
             barmode="overlay",
             xaxis=dict(title="Pacientes (neg=M)"),
@@ -434,8 +596,16 @@ with col_meio:
         df_geo = base.dropna(subset=["cidade_moradia"]).copy()
         df_geo["Pacientes/Internações"] = 1
 
-        estado_col = next((c for c in df_geo.columns if c.lower() in ["estado_residencia","uf_residencia","uf","estado","sigla_uf"]), None)
-        regiao_col = next((c for c in df_geo.columns if "regiao" in c.lower() and "saude" in c.lower()), None)
+        estado_col = next(
+            (c for c in df_geo.columns if c.lower() in
+             ["estado_residencia","uf_residencia","uf","estado","sigla_uf"]),
+            None
+        )
+        regiao_col = next(
+            (c for c in df_geo.columns
+             if "regiao" in c.lower() and "saude" in c.lower()),
+            None
+        )
 
         path_cols = []
         if estado_col: path_cols.append(estado_col)
@@ -452,17 +622,24 @@ with col_meio:
             margin=dict(t=40, l=0, r=0, b=0)
         )
         st.plotly_chart(fig, use_container_width=True)
-        st.caption("Use os filtros de Estado / Região de saúde / Município para refinar a distribuição.")
+        st.caption(
+            "Use os filtros de Estado / Região de saúde / Município "
+            "para refinar a distribuição."
+        )
     else:
         st.info("Coluna 'cidade_moradia' não encontrada.")
 
-    # Raça × Sexo (embaixo)
+    # Raça × Sexo
     st.subheader("Raça/Cor × Sexo")
     if {"etnia","sexo"}.issubset(base.columns):
-        df_etnia = (base.value_counts(["etnia","sexo"])
-                         .rename("cont").reset_index())
-        fig = px.bar(df_etnia, x="etnia", y="cont", color="sexo",
-                     barmode="group", text_auto=True)
+        df_etnia = (
+            base.value_counts(["etnia","sexo"])
+                .rename("cont").reset_index()
+        )
+        fig = px.bar(
+            df_etnia, x="etnia", y="cont", color="sexo",
+            barmode="group", text_auto=True
+        )
         fig.update_layout(
             xaxis_title="Raça/Cor",
             yaxis_title="Pacientes/Internações",
@@ -475,7 +652,7 @@ with col_meio:
 
 # ========= COLUNA DIREITA =========
 with col_dir:
-    # Card grande de quantidade de pacientes, como no print
+    # Card grande de quantidade de pacientes
     st.subheader("Quantidade de pacientes")
     st.markdown(
         f"<h2 style='text-align:center;'>{int(pacientes):,}</h2>".replace(",","."),
@@ -487,13 +664,20 @@ with col_dir:
 
     # Procedimentos (top N)
     st.subheader("Procedimentos (amostra)")
-    proc_cols = [c for c in base.columns if "proc_nome_prim" in c or "procedimento" == c.lower()]
+    proc_cols = [
+        c for c in base.columns
+        if "proc_nome_prim" in c or c.lower() == "procedimento"
+    ]
     if proc_cols:
         pcol = proc_cols[0]
-        top_proc = (base[pcol].dropna().astype(str)
-                    .value_counts().head(10).reset_index())
+        top_proc = (
+            base[pcol].dropna().astype(str)
+                .value_counts().head(10).reset_index()
+        )
         top_proc.columns = ["Procedimento", "Pacientes/Internações"]
-        fig = px.bar(top_proc, x="Procedimento", y="Pacientes/Internações", text_auto=True)
+        fig = px.bar(
+            top_proc, x="Procedimento", y="Pacientes/Internações", text_auto=True
+        )
         fig.update_layout(
             xaxis_tickangle=-35,
             height=260,
@@ -507,13 +691,21 @@ with col_dir:
 
     # Grupo / categorias CID-10
     st.subheader("Grupo e categorias de CID-10 (amostra)")
-    cid_col = [c for c in df_f.columns if ("cid" in c.lower() or "descricao" in c.lower() or "to_charsubstrievdescricao14000" in c.lower())]
+    cid_col = [
+        c for c in df_f.columns
+        if ("cid" in c.lower() or "descricao" in c.lower()
+            or "to_charsubstrievdescricao14000" in c.lower())
+    ]
     if cid_col:
         col_cid = cid_col[0]
-        top = (df_f[col_cid].dropna().astype(str).str.upper().str[:50]
-               .value_counts().head(10).reset_index())
+        top = (
+            df_f[col_cid].dropna().astype(str).str.upper().str[:50]
+                .value_counts().head(10).reset_index()
+        )
         top.columns = ["CID/Descrição (amostra)", "Frequência"]
-        fig = px.bar(top, x="CID/Descrição (amostra)", y="Frequência", text_auto=True)
+        fig = px.bar(
+            top, x="CID/Descrição (amostra)", y="Frequência", text_auto=True
+        )
         fig.update_layout(
             xaxis_tickangle=-35,
             height=260,
