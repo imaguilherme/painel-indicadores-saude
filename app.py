@@ -124,6 +124,7 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
         labels=labels,
         right=True,
         include_lowest=True
+    )
     
 
     # ----------------- deduplicação de eventos (AIH) -----------------
