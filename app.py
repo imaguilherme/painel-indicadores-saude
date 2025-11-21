@@ -191,14 +191,16 @@ def load_duckdb(csv_paths):
           *
         FROM proced;
 
-        CREATE VIEW proc_agg AS
-        SELECT
-          prontuario_anonimo,
-          COUNT(DISTINCT codigo_procedimento) AS n_proced,
-          ANY_VALUE(codigo_procedimento)      AS proc_prim,
-          ANY_VALUE(procedimento)             AS proc_nome_prim
-        FROM proc_n
-        GROUP BY prontuario_anonimo;
+       CREATE VIEW proc_agg AS
+SELECT
+  prontuario_anonimo,
+  COUNT(DISTINCT codigo_procedimento) AS n_proced,
+  ANY_VALUE(codigo_procedimento)      AS proc_prim,
+  ANY_VALUE(procedimento)             AS proc_nome_prim,
+  ANY_VALUE(natureza_agend)           AS natureza_agend
+FROM proc_n
+GROUP BY prontuario_anonimo;
+
 
         CREATE VIEW dataset AS
         SELECT
