@@ -765,35 +765,42 @@ with col_esq:
         else:
             st.info("Coluna 'sexo' não encontrada.")
 
-    with c2:
-        carater_col = None
-            for cand in [
-                "carater_atendimento",
-                "caracter_atendimento",
-                "carater",
-                "caráter_atendimento",
-                "carater_atend",
-                "natureza_agend",
+with c2:
+    st.subheader("Caráter do atendimento")
+
+    carater_col = None
+    for cand in [
+        "carater_atendimento",
+        "caracter_atendimento",
+        "carater",
+        "caráter_atendimento",
+        "carater_atend",
+        "natureza_agend",     # <-- esta é a correta para sua base
     ]:
         if cand in df_f.columns:
             carater_col = cand
             break
 
-        st.subheader("Caráter do atendimento")
-        if carater_col:
-            ordem = df_f[carater_col].value_counts().index.tolist()
-            df_car = df_f.value_counts(carater_col).rename("cont").reset_index()
-            fig = px.bar(
-                df_car,
-                x=carater_col,
-                y="cont",
-                text_auto=True,
-                category_orders={carater_col: ordem},
-            )
-            fig.update_layout(height=230, xaxis_title="", margin=dict(t=40, b=80))
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Coluna de 'caráter do atendimento' não encontrada.")
+    if carater_col:
+        ordem = df_f[carater_col].value_counts().index.tolist()
+        df_car = df_f.value_counts(carater_col).rename("cont").reset_index()
+
+        fig = px.bar(
+            df_car,
+            x=carater_col,
+            y="cont",
+            text_auto=True,
+            category_orders={carater_col: ordem},
+        )
+        fig.update_layout(
+            height=230,
+            xaxis_title="",
+            margin=dict(t=40, b=80)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Coluna de 'caráter do atendimento' não encontrada.")
+
 
     # PIRÂMIDE ETÁRIA (ESTILO RELATÓRIO)
     st.subheader("Pirâmide Etária")
