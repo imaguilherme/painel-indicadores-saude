@@ -759,7 +759,6 @@ with col_esq:
 with col_meio:
     st.subheader("Estado → Região de Saúde → Município de residência")
 
-    # Só plota se tivermos as 3 colunas-chave
     if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base.columns):
         df_geo_plot = base.dropna(subset=["cidade_moradia"]).copy()
         df_geo_plot["Pacientes/Internações"] = 1
@@ -784,7 +783,6 @@ with col_meio:
             "Verifique se o arquivo de Regiões/Macrorregiões de Saúde foi carregado no painel "
             "e se o enriquecimento geográfico está habilitado."
         )
-
 
     # Raça × Sexo
     st.subheader("Raça/Cor × Sexo")
