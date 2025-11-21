@@ -161,7 +161,6 @@ def load_duckdb(csv_paths):
 def df_from_duckdb(con, sql):
     return con.execute(sql).df()
 
-# -------------------- enriquecimento com tabelas auxiliares --------------------
 def enrich_with_aux_tables(df: pd.DataFrame,
                            cid_file=None,
                            sigtap_file=None,
@@ -174,6 +173,9 @@ def enrich_with_aux_tables(df: pd.DataFrame,
 
     Todos são opcionais; se o arquivo não for enviado, nada quebra.
     """
+    if df is None:
+        return df
+
     df_enriched = df.copy()
 
     # -------- CID-10 --------
@@ -182,7 +184,7 @@ def enrich_with_aux_tables(df: pd.DataFrame,
             cid_df = pd.read_csv(cid_file, dtype=str)
             cid_df.columns = [c.lower() for c in cid_df.columns]
 
-            # tenta identificar coluna de código CID (ex: 'cid', 'codigo_cid', etc.)
+            # tenta identificar coluna de código CID
             cid_code_col = next(
                 (c for c in cid_df.columns if "cid" in c and "descricao" not in c),
                 None
@@ -195,7 +197,6 @@ def enrich_with_aux_tables(df: pd.DataFrame,
                     cid_df[cid_code_col].astype(str).str.strip().str.upper().str[:3]
                 )
 
-                # tenta pegar colunas de capítulo / grupo / subcategoria / descrição
                 keep_cols = [cid_code_col]
                 keep_cols += [
                     c for c in cid_df.columns
@@ -218,14 +219,12 @@ def enrich_with_aux_tables(df: pd.DataFrame,
             sig_df = pd.read_csv(sigtap_file, dtype=str)
             sig_df.columns = [c.lower() for c in sig_df.columns]
 
-            # identifica código de procedimento no SIGTAP
             sig_code_col = next(
                 (c for c in sig_df.columns
                  if "proced" in c and ("cod" in c or "codigo" in c)),
                 None
             )
 
-            # coluna de proc no dataset principal
             proc_col = None
             for cand in ["proc_prim", "codigo_procedimento", "cod_procedimento"]:
                 if cand in df_enriched.columns:
@@ -252,7 +251,7 @@ def enrich_with_aux_tables(df: pd.DataFrame,
         except Exception as e:
             st.warning(f"Não foi possível enriquecer com SIGTAP: {e}")
 
-         # -------- Geografia (UF / Macro / Região de Saúde) --------
+    # -------- Geografia (UF / Macro / Região de Saúde) --------
     if geo_file is not None:
         try:
             geo_df = pd.read_csv(geo_file, dtype=str)
@@ -272,14 +271,12 @@ def enrich_with_aux_tables(df: pd.DataFrame,
                     geo_df["no_municipio"].astype(str).str.upper().str.strip()
                 )
 
-                # reduz para as colunas que vamos usar
                 cols_keep = []
                 for c in ["no_municipio_norm", "sg_uf", "no_macrorregional", "no_cir_padrao"]:
                     if c in geo_df.columns:
                         cols_keep.append(c)
                 geo_small = geo_df[cols_keep].drop_duplicates(subset=["no_municipio_norm"])
 
-                # merge principal por nome do município normalizado
                 df_enriched = df_enriched.merge(
                     geo_small,
                     how="left",
@@ -287,7 +284,6 @@ def enrich_with_aux_tables(df: pd.DataFrame,
                     right_on="no_municipio_norm"
                 )
 
-                # renomeia para nomes mais amigáveis no painel
                 rename_map = {}
                 if "sg_uf" in df_enriched.columns:
                     rename_map["sg_uf"] = "uf"
@@ -299,7 +295,6 @@ def enrich_with_aux_tables(df: pd.DataFrame,
                 if rename_map:
                     df_enriched = df_enriched.rename(columns=rename_map)
 
-                # limpa colunas auxiliares
                 df_enriched = df_enriched.drop(
                     columns=["cidade_nome_norm", "no_municipio_norm"],
                     errors="ignore"
@@ -307,6 +302,9 @@ def enrich_with_aux_tables(df: pd.DataFrame,
 
         except Exception as e:
             st.warning(f"Não foi possível enriquecer com regiões de saúde: {e}")
+
+    # 🔚 ESSA LINHA É FUNDAMENTAL
+    return df_enriched
 
 # -------------------- funções de base --------------------
 def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
