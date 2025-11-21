@@ -48,43 +48,6 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # ----------------- idade: nascimento -> internação/procedimento -----------------
-    birth_col = next(
-        (c for c in ["data_nascimento", "dt_nascimento", "data_nasc", "dt_nasc"] if c in df.columns),
-        None,
-    )
-    ref_col = next(
-        (
-            c
-            for c in ["data_internacao", "data_cirurgia_min", "data_cirurgia", "data_procedimento"]
-            if c in df.columns
-        ),
-        None,
-    )
-
-    if birth_col and ref_col:
-        dob = pd.to_datetime(df[birth_col], errors="coerce", dayfirst=True)
-        ref = pd.to_datetime(df[ref_col], errors="coerce", dayfirst=True)
-        idade_anos = ((ref - dob).dt.days / 365.25).where(dob.notna() & ref.notna())
-        df["idade"] = np.floor(idade_anos).astype("float")
-
-    # ----------------- sexo -----------------
-    if "sexo" in df.columns:
-        df["sexo"] = (
-            df["sexo"].astype(str).str.strip().str.upper().replace(
-                {
-                    "M": "Masculino",
-                    "F": "Feminino",
-                    "MASCULINO": "Masculino",
-                    "FEMININO": "Feminino",
-                }
-            )
-        )
-
-    # ----------------- ano da internação -----------------
-    if "data_internacao" in df.columns and "ano_internacao" not in df.columns:
-        df["ano_internacao"] = df["data_internacao"].dt.year
-
     # ----------------- dias de permanência -----------------
     if {"data_internacao", "data_alta"}.issubset(df.columns):
         df["dias_permanencia"] = (df["data_alta"] - df["data_internacao"]).dt.days
@@ -93,18 +56,18 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     if "idade" in df.columns:
         bins = [
             -1,
-            0,  # < 1 ano
-            8,  # 01 a 08 anos
-            17,  # 09 a 17 anos
-            26,  # 18 a 26 anos
-            35,  # 27 a 35 anos
-            44,  # 36 a 44 anos
-            53,  # 45 a 53 anos
-            62,  # 54 a 62 anos
-            71,  # 63 a 71 anos
-            80,  # 72 a 80 anos
-            89,  # 81 a 89 anos
-            200,  # 90 anos ou mais
+            0,
+            8,
+            17,
+            26,
+            35,
+            44,
+            53,
+            62,
+            71,
+            80,
+            89,
+            200,
         ]
 
         labels = [
@@ -130,10 +93,9 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
             include_lowest=True,
         )
 
-    # ----------------- deduplicação de eventos (AIH) -----------------
+    # ----------------- deduplicação -----------------
     keys = [
-        c
-        for c in ["codigo_internacao", "prontuario_anonimo", "data_internacao", "data_alta"]
+        c for c in ["codigo_internacao", "prontuario_anonimo", "data_internacao", "data_alta"]
         if c in df.columns
     ]
     if keys:
