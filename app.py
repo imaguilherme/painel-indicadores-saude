@@ -222,7 +222,7 @@ def enrich_with_aux_tables(df: pd.DataFrame,
 
     df_enriched = df.copy()
 
-      # -------- CID-10 --------
+     # -------- CID-10 --------
     if cid_file is not None:
         try:
             cid_df = pd.read_csv(cid_file, dtype=str)
@@ -282,6 +282,7 @@ def enrich_with_aux_tables(df: pd.DataFrame,
 
         except Exception as e:
             st.warning(f"Não foi possível enriquecer com CID-10: {e}")
+
 
 
     # -------- Procedimentos (SIGTAP) --------
