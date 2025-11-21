@@ -755,6 +755,7 @@ col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
 with col_esq:
     c1, c2 = st.columns(2)
 
+    # Sexo
     with c1:
         st.subheader("Sexo")
         if "sexo" in base.columns:
@@ -765,42 +766,41 @@ with col_esq:
         else:
             st.info("Coluna 'sexo' não encontrada.")
 
-with c2:
-    st.subheader("Caráter do atendimento")
+    # Caráter do atendimento (usa NATUREZA_AGEND da tabela de procedimentos)
+    with c2:
+        st.subheader("Caráter do atendimento")
 
-    carater_col = None
-    for cand in [
-        "carater_atendimento",
-        "caracter_atendimento",
-        "carater",
-        "caráter_atendimento",
-        "carater_atend",
-        "natureza_agend",     # <-- esta é a correta para sua base
-    ]:
-        if cand in df_f.columns:
-            carater_col = cand
-            break
+        carater_col = None
+        for cand in [
+            "carater_atendimento",
+            "caracter_atendimento",
+            "carater",
+            "caráter_atendimento",
+            "carater_atend",
+            "natureza_agend",
+        ]:
+            if cand in df_f.columns:
+                carater_col = cand
+                break
 
-    if carater_col:
-        ordem = df_f[carater_col].value_counts().index.tolist()
-        df_car = df_f.value_counts(carater_col).rename("cont").reset_index()
-
-        fig = px.bar(
-            df_car,
-            x=carater_col,
-            y="cont",
-            text_auto=True,
-            category_orders={carater_col: ordem},
-        )
-        fig.update_layout(
-            height=230,
-            xaxis_title="",
-            margin=dict(t=40, b=80)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Coluna de 'caráter do atendimento' não encontrada.")
-
+        if carater_col:
+            ordem = df_f[carater_col].value_counts().index.tolist()
+            df_car = df_f.value_counts(carater_col).rename("cont").reset_index()
+            fig = px.bar(
+                df_car,
+                x=carater_col,
+                y="cont",
+                text_auto=True,
+                category_orders={carater_col: ordem},
+            )
+            fig.update_layout(
+                height=230,
+                xaxis_title="",
+                margin=dict(t=40, b=80),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Coluna de 'caráter do atendimento' não encontrada.")
 
     # PIRÂMIDE ETÁRIA (ESTILO RELATÓRIO)
     st.subheader("Pirâmide Etária")
@@ -824,7 +824,9 @@ with c2:
         df_pira = df_pira[df_pira["faixa_etaria"].isin(categorias)]
 
         tabela = (
-            df_pira.groupby(["faixa_etaria", "sexo"]).size().reset_index(name="n")
+            df_pira.groupby(["faixa_etaria", "sexo"])
+            .size()
+            .reset_index(name="n")
         )
         pivot = tabela.pivot(index="faixa_etaria", columns="sexo", values="n").fillna(0)
         pivot = pivot.reindex(categorias)
@@ -854,8 +856,6 @@ with c2:
             text=pivot["Masculino"].astype(int),
             textposition="outside",
         )
-
-        max_val = max(male.max(), pivot["Feminino"].max()) if len(pivot) else 0
 
         fig.update_layout(
             barmode="overlay",
