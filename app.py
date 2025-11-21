@@ -820,38 +820,55 @@ with col_esq:
             st.info("Coluna de 'caráter do atendimento' não encontrada.")
 
     # Pirâmide etária
-    st.subheader("Pirâmide etária")
-    if {"idade","sexo","faixa_etaria"}.issubset(base.columns):
-        tmp = (
-            base.dropna(subset=["faixa_etaria","sexo"])
-                .groupby(["faixa_etaria","sexo"])
-                .size().reset_index(name="n")
-        )
-        male = tmp[tmp["sexo"].eq("Masculino")].set_index("faixa_etaria")["n"].reindex(
-            base["faixa_etaria"].cat.categories, fill_value=0
-        )
-        female = tmp[tmp["sexo"].eq("Feminino")].set_index("faixa_etaria")["n"].reindex(
-            base["faixa_etaria"].cat.categories, fill_value=0
-        )
-        fig = go.Figure()
-        fig.add_bar(
-            y=male.index.astype(str), x=-male.values,
-            name="Masculino", orientation="h"
-        )
-        fig.add_bar(
-            y=female.index.astype(str), x=female.values,
-            name="Feminino", orientation="h"
-        )
-        fig.update_layout(
-            barmode="overlay",
-            xaxis=dict(title="Pacientes (neg=M)"),
-            yaxis=dict(title="Faixa etária"),
-            height=380,
-            margin=dict(t=40, b=40)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Requer colunas 'idade', 'sexo' e 'faixa_etaria'.")
+st.subheader("Pirâmide etária")
+if {"idade", "sexo", "faixa_etaria"}.issubset(base.columns):
+    # conta por faixa_etaria x sexo
+    tmp = (
+        base.dropna(subset=["faixa_etaria", "sexo"])
+            .groupby(["faixa_etaria", "sexo"])
+            .size()
+            .reset_index(name="n")
+    )
+
+    # ordem das faixas conforme categorias do pd.cut
+    categorias = base["faixa_etaria"].cat.categories
+
+    male = (
+        tmp[tmp["sexo"].eq("Masculino")]
+        .set_index("faixa_etaria")["n"]
+        .reindex(categorias, fill_value=0)
+    )
+    female = (
+        tmp[tmp["sexo"].eq("Feminino")]
+        .set_index("faixa_etaria")["n"]
+        .reindex(categorias, fill_value=0)
+    )
+
+    fig = go.Figure()
+    fig.add_bar(
+        y=categorias.astype(str),
+        x=-male.values,
+        name="Masculino",
+        orientation="h"
+    )
+    fig.add_bar(
+        y=categorias.astype(str),
+        x=female.values,
+        name="Feminino",
+        orientation="h"
+    )
+
+    fig.update_layout(
+        barmode="overlay",
+        xaxis=dict(title="Pacientes (neg = masculino)"),
+        yaxis=dict(title="Faixa etária"),
+        height=380,
+        margin=dict(t=40, b=40)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Requer colunas 'idade', 'sexo' e 'faixa_etaria'.")
+
 
 # ========= COLUNA DO MEIO =========
 with col_meio:
