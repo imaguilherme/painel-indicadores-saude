@@ -147,8 +147,13 @@ def load_parquet(file):
     return _post_load(pd.read_parquet(file))
 
 
+
 @st.cache_resource(show_spinner=False)
 def load_duckdb(csv_paths):
+    """
+    Carrega EVOLUÇÕES, PROCEDIMENTOS e CIDS via DuckDB
+    e monta a view 'dataset' ligada por PRONTUARIO_ANONIMO.
+    """
     con = duckdb.connect(database=":memory:")
     evo, proc, cti = csv_paths
 
@@ -160,21 +165,22 @@ def load_duckdb(csv_paths):
             SELECT *
             FROM read_csv_auto(
                 '{path_esc}',
-                header=True,
-                sep=None,
-                quote='"',
-                escape='\"',
-                auto_detect=True,
-                SAMPLE_SIZE=-1,
-                ignore_errors=True
+                header      = TRUE,
+                delim       = ',',
+                encoding    = 'utf-8',
+                auto_detect = TRUE,
+                ignore_errors = TRUE,
+                sample_size = -1
             );
             """
         )
 
+    # cria as 3 views brutas
     make_view("evolu", evo)
     make_view("proced", proc)
     make_view("cids", cti)
 
+    # normaliza prontuário e agrega procedimentos
     con.execute(
         """
         CREATE VIEW evolu_n AS
@@ -195,28 +201,31 @@ def load_duckdb(csv_paths):
             *
         FROM proced;
 
+        -- agregação por prontuário para não multiplicar linhas
         CREATE VIEW proc_agg AS
         SELECT
-            lower(trim(prontuario_anonimo)) AS prontuario_anonimo,
-            COUNT(*) AS n_proced,
-            ANY_VALUE(natureza_agend) AS natureza_agend,
-            ANY_VALUE(codigo_procedimento) AS proc_prim,
-            ANY_VALUE(procedimento) AS proc_nome_prim
-        FROM proced
-        GROUP BY 1;
+            prontuario_anonimo,
+            COUNT(*)                        AS n_proced,
+            ANY_VALUE(codigo_procedimento)  AS proc_prim,
+            ANY_VALUE(procedimento)         AS proc_nome_prim,
+            ANY_VALUE(natureza_agend)       AS natureza_agend
+        FROM proc_n
+        GROUP BY prontuario_anonimo;
 
+        -- dataset final
         CREATE VIEW dataset AS
         SELECT
             e.*,
             c.* EXCLUDE (prontuario_anonimo),
             p.*
         FROM evolu_n e
-        LEFT JOIN cids_n c USING (prontuario_anonimo)
+        LEFT JOIN cids_n  c USING (prontuario_anonimo)
         LEFT JOIN proc_agg p USING (prontuario_anonimo);
         """
     )
 
     return con
+
 
 
 
