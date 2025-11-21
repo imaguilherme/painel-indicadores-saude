@@ -542,4 +542,315 @@ if df is None or df.empty:
     st.stop()
 
 # -------- uploads das tabelas auxiliares --------
-with st.expander
+with st.expander("Carregar tabelas auxiliares (opcional) – CID-10, SIGTAP e Regiões de Saúde"):
+    cid_file = st.file_uploader(
+        "Tabela de CIDs (classificação em capítulo/grupo/subcategoria) – CSV",
+        type=["csv"], key="cid_map"
+    )
+    sigtap_file = st.file_uploader(
+        "Tabela de procedimentos (SIGTAP) – CSV",
+        type=["csv"], key="sigtap_map"
+    )
+    geo_file = st.file_uploader(
+        "Tabela de Regiões/Macrorregiões de Saúde e Municípios – CSV",
+        type=["csv"], key="geo_map"
+    )
+
+if cid_file or sigtap_file or geo_file:
+    df = enrich_with_aux_tables(df, cid_file, sigtap_file, geo_file)
+
+# -------------------- filtros e bases --------------------
+f = build_filters(df)
+df_f = apply_filters(df, f)          # eventos (AIHs) filtrados
+df_pac = pacientes_unicos(df_f)     # 1 linha por paciente filtrado
+
+# mostra filtros ativos no corpo da página
+show_active_filters(f)
+st.divider()
+
+# toggle de análise
+modo_perfil = st.toggle(
+    "Contar por **paciente único** (perfil). Desative para **internações**.",
+    value=True
+)
+base = df_pac if modo_perfil else df_f
+
+# -------------------- KPIs --------------------
+pacientes, internacoes, tmi, mort_hosp = kpis(df_f, df_pac)
+ri_proc = reinternacao_30d_pos_proced(df_f)
+ri_alta = reinternacao_30d_pos_alta(df_f)
+
+k1,k2,k3,k4,k5,k6 = st.columns(6)
+k1.metric("Pacientes (distintos)",
+          f"{int(pacientes):,}".replace(",",".") if pd.notna(pacientes) else "—")
+k2.metric("Internações",
+          f"{int(internacoes):,}".replace(",",".") if pd.notna(internacoes) else "—")
+k3.metric("Tempo médio de internação (dias)",
+          f"{tmi:.1f}" if pd.notna(tmi) else "—")
+k4.metric("Reinternação 30d (procedimento)",
+          f"{ri_proc:.1f}%" if pd.notna(ri_proc) else "—")
+k5.metric("Reinternação 30d (alta)",
+          f"{ri_alta:.1f}%" if pd.notna(ri_alta) else "—")
+k6.metric("Mortalidade hospitalar",
+          f"{mort_hosp:.1f}%" if pd.notna(mort_hosp) else "—")
+
+st.divider()
+
+# -------------------- "Abas" de indicador + comparativo anual --------------------
+st.markdown("### Indicadores principais")
+
+indicador_top = st.radio(
+    "Selecione o indicador para o comparativo anual:",
+    ["Quantidade de pacientes", "Quantidade de internações"],
+    horizontal=True,
+    key="ind_top"
+)
+
+ano_col = (
+    "ano_internacao" if "ano_internacao" in df_f.columns
+    else ("ano" if "ano" in df_f.columns else None)
+)
+
+if ano_col:
+    df_year = df_f[~df_f[ano_col].isna()].copy()
+    if not df_year.empty:
+        grp = df_year.groupby(ano_col)
+
+        if indicador_top == "Quantidade de pacientes":
+            if "prontuario_anonimo" in df_year.columns:
+                serie = grp["prontuario_anonimo"].nunique()
+            else:
+                serie = grp.size()
+            y_label = "Pacientes distintos"
+        else:  # Quantidade de internações
+            if "codigo_internacao" in df_year.columns:
+                serie = grp["codigo_internacao"].nunique()
+            else:
+                serie = grp.size()
+            y_label = "Internações"
+
+        df_plot = serie.reset_index(name="valor").sort_values(ano_col)
+        fig_ano = px.bar(df_plot, x=ano_col, y="valor", text_auto=True)
+        fig_ano.update_layout(
+            xaxis_title="Ano",
+            yaxis_title=y_label,
+            height=280,
+            margin=dict(t=40, b=40)
+        )
+        st.plotly_chart(fig_ano, use_container_width=True)
+    else:
+        st.info("Sem dados para o comparativo anual com os filtros atuais.")
+else:
+    st.info("Coluna de ano não encontrada no dataset.")
+
+st.divider()
+
+# -------------------- GRID PRINCIPAL--------------------
+col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
+
+# ========= COLUNA ESQUERDA =========
+with col_esq:
+    # linha Sexo + Caráter de Atendimento
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.subheader("Sexo")
+        if "sexo" in base.columns:
+            df_sexo = base.value_counts("sexo").rename("cont").reset_index()
+            fig = px.bar(df_sexo, x="sexo", y="cont", text_auto=True)
+            fig.update_layout(
+                height=230,
+                margin=dict(t=40, b=30)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Coluna 'sexo' não encontrada.")
+
+    with c2:
+        # Caráter de atendimento (se existir)
+        carater_col = None
+        for cand in [
+            "carater_atendimento","caracter_atendimento","carater",
+            "caráter_atendimento","carater_atend"
+        ]:
+            if cand in df_f.columns:
+                carater_col = cand
+                break
+
+        st.subheader("Caráter do atendimento")
+        if carater_col:
+            ordem = df_f[carater_col].value_counts().index.tolist()
+            df_car = df_f.value_counts(carater_col).rename("cont").reset_index()
+            fig = px.bar(
+                df_car, x=carater_col, y="cont", text_auto=True,
+                category_orders={carater_col: ordem}
+            )
+            fig.update_layout(
+                height=230,
+                xaxis_title="",
+                margin=dict(t=40, b=80)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Coluna de 'caráter do atendimento' não encontrada.")
+
+    # Pirâmide etária
+    st.subheader("Pirâmide etária")
+    if {"idade","sexo","faixa_etaria"}.issubset(base.columns):
+        tmp = (
+            base.dropna(subset=["faixa_etaria","sexo"])
+                .groupby(["faixa_etaria","sexo"])
+                .size().reset_index(name="n")
+        )
+        male = tmp[tmp["sexo"].eq("Masculino")].set_index("faixa_etaria")["n"].reindex(
+            base["faixa_etaria"].cat.categories, fill_value=0
+        )
+        female = tmp[tmp["sexo"].eq("Feminino")].set_index("faixa_etaria")["n"].reindex(
+            base["faixa_etaria"].cat.categories, fill_value=0
+        )
+        fig = go.Figure()
+        fig.add_bar(
+            y=male.index.astype(str), x=-male.values,
+            name="Masculino", orientation="h"
+        )
+        fig.add_bar(
+            y=female.index.astype(str), x=female.values,
+            name="Feminino", orientation="h"
+        )
+        fig.update_layout(
+            barmode="overlay",
+            xaxis=dict(title="Pacientes (neg=M)"),
+            yaxis=dict(title="Faixa etária"),
+            height=380,
+            margin=dict(t=40, b=40)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Requer colunas 'idade', 'sexo' e 'faixa_etaria'.")
+
+# ========= COLUNA DO MEIO =========
+with col_meio:
+    st.subheader("Estado / Região de residência do paciente")
+
+    if "cidade_moradia" in base.columns:
+        df_geo_plot = base.dropna(subset=["cidade_moradia"]).copy()
+        df_geo_plot["Pacientes/Internações"] = 1
+
+        estado_col = next(
+            (c for c in df_geo_plot.columns if c.lower() in
+             ["estado_residencia","uf_residencia","uf","estado","sigla_uf"]),
+            None
+        )
+        regiao_col = next(
+            (c for c in df_geo_plot.columns
+             if "regiao" in c.lower() and "saude" in c.lower()),
+            None
+        )
+
+        path_cols = []
+        if estado_col: path_cols.append(estado_col)
+        if regiao_col: path_cols.append(regiao_col)
+        path_cols.append("cidade_moradia")
+
+        fig = px.treemap(
+            df_geo_plot,
+            path=path_cols,
+            values="Pacientes/Internações"
+        )
+        fig.update_layout(
+            height=500,
+            margin=dict(t=40, l=0, r=0, b=0)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(
+            "Use os filtros de Estado / Região de saúde / Município "
+            "para refinar a distribuição."
+        )
+    else:
+        st.info("Coluna 'cidade_moradia' não encontrada.")
+
+    # Raça × Sexo
+    st.subheader("Raça/Cor × Sexo")
+    if {"etnia","sexo"}.issubset(base.columns):
+        df_etnia = (
+            base.value_counts(["etnia","sexo"])
+                .rename("cont").reset_index()
+        )
+        fig = px.bar(
+            df_etnia, x="etnia", y="cont", color="sexo",
+            barmode="group", text_auto=True
+        )
+        fig.update_layout(
+            xaxis_title="Raça/Cor",
+            yaxis_title="Pacientes/Internações",
+            height=320,
+            margin=dict(t=40, b=80)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Requer colunas 'etnia' e 'sexo'.")
+
+# ========= COLUNA DIREITA =========
+with col_dir:
+    # Card grande de quantidade de pacientes
+    st.subheader("Quantidade de pacientes")
+    st.markdown(
+        f"<h2 style='text-align:center;'>{int(pacientes):,}</h2>".replace(",","."),
+        unsafe_allow_html=True
+    )
+    st.caption("Pacientes distintos no período filtrado")
+
+    st.markdown("---")
+
+    # Procedimentos (top N)
+    st.subheader("Procedimentos (amostra)")
+    proc_cols = [
+        c for c in base.columns
+        if "proc_nome_prim" in c or c.lower() == "procedimento"
+    ]
+    if proc_cols:
+        pcol = proc_cols[0]
+        top_proc = (
+            base[pcol].dropna().astype(str)
+                .value_counts().head(10).reset_index()
+        )
+        top_proc.columns = ["Procedimento", "Pacientes/Internações"]
+        fig = px.bar(
+            top_proc, x="Procedimento", y="Pacientes/Internações", text_auto=True
+        )
+        fig.update_layout(
+            xaxis_tickangle=-35,
+            height=260,
+            margin=dict(t=40, b=120)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Não encontrei coluna de procedimento agregada.")
+
+    st.markdown("---")
+
+    # Grupo / categorias CID-10
+    st.subheader("Grupo e categorias de CID-10 (amostra)")
+    cid_col = [
+        c for c in df_f.columns
+        if ("cid" in c.lower() or "descricao" in c.lower()
+            or "to_charsubstrievdescricao14000" in c.lower())
+    ]
+    if cid_col:
+        col_cid = cid_col[0]
+        top = (
+            df_f[col_cid].dropna().astype(str).str.upper().str[:50]
+                .value_counts().head(10).reset_index()
+        )
+        top.columns = ["CID/Descrição (amostra)", "Frequência"]
+        fig = px.bar(
+            top, x="CID/Descrição (amostra)", y="Frequência", text_auto=True
+        )
+        fig.update_layout(
+            xaxis_tickangle=-35,
+            height=260,
+            margin=dict(t=40, b=120)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Não encontrei coluna de CID/descrição no dataset.")
