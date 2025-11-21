@@ -252,38 +252,54 @@ def enrich_with_aux_tables(df: pd.DataFrame,
         except Exception as e:
             st.warning(f"Não foi possível enriquecer com SIGTAP: {e}")
 
-    # -------- Geografia (UF / Macro / Região de Saúde) --------
+        # -------- Geografia (UF / Macro / Região de Saúde) --------
     if geo_file is not None:
         try:
             geo_df = pd.read_csv(geo_file, dtype=str)
             geo_df.columns = [c.lower() for c in geo_df.columns]
 
-            if "cidade_moradia" in df_enriched.columns:
-                df_enriched["cidade_moradia"] = (
-                    df_enriched["cidade_moradia"]
-                    .astype(str).str.upper().str.strip()
+            # Esperado a partir do arquivo UF_Macro_Região_Município.csv:
+            # sg_uf          -> sigla do estado
+            # no_macrorregional -> nome da macrorregião
+            # no_cir_padrao  -> nome da região de saúde
+            # no_municipio   -> nome do município
+            if "cidade_moradia" in df_enriched.columns and "no_municipio" in geo_df.columns:
+                # normaliza textos para casar na junção
+                df_enriched["cidade_moradia_norm"] = (
+                    df_enriched["cidade_moradia"].astype(str).str.upper().str.strip()
+                )
+                geo_df["no_municipio_norm"] = (
+                    geo_df["no_municipio"].astype(str).str.upper().str.strip()
                 )
 
-                mun_col = next(
-                    (c for c in geo_df.columns
-                     if "municip" in c and ("nome" in c or "município" in c)),
-                    None
-                )
-                if mun_col:
-                    geo_df[mun_col] = (
-                        geo_df[mun_col].astype(str).str.upper().str.strip()
-                    )
+                # faz o merge por nome do município
+                geo_small = geo_df[[
+                    "sg_uf", "no_macrorregional", "no_cir_padrao", "no_municipio_norm"
+                ]].drop_duplicates(subset=["no_municipio_norm"])
 
-                    df_enriched = df_enriched.merge(
-                        geo_df,
-                        how="left",
-                        left_on="cidade_moradia",
-                        right_on=mun_col
-                    )
+                df_enriched = df_enriched.merge(
+                    geo_small,
+                    how="left",
+                    left_on="cidade_moradia_norm",
+                    right_on="no_municipio_norm"
+                )
+
+                # renomeia para nomes mais amigáveis no painel
+                df_enriched = df_enriched.rename(columns={
+                    "sg_uf": "uf",
+                    "no_macrorregional": "macroregiao",
+                    "no_cir_padrao": "regiao_saude",
+                })
+
+                # limpa colunas auxiliares
+                df_enriched = df_enriched.drop(
+                    columns=["cidade_moradia_norm", "no_municipio_norm"],
+                    errors="ignore"
+                )
+
         except Exception as e:
             st.warning(f"Não foi possível enriquecer com regiões de saúde: {e}")
 
-    return df_enriched
 
 # -------------------- funções de base --------------------
 def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
