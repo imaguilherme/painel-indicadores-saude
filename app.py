@@ -41,10 +41,8 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     if "sexo" in df.columns:
         df["sexo"] = (
             df["sexo"].astype(str).str.strip().str.upper()
-              .replace({
-                  "M":"Masculino","F":"Feminino",
-                  "MASCULINO":"Masculino","FEMININO":"Feminino"
-              })
+              .replace({"M":"Masculino","F":"Feminino",
+                        "MASCULINO":"Masculino","FEMININO":"Feminino"})
         )
 
     # derivar ano da internação, se não vier pronto
@@ -84,27 +82,27 @@ def load_duckdb(csv_paths):
     Registra 3 CSVs (EVOLUCOES, PROCED, CIDS/UTI) e cria view dataset unificada (lazy).
 
     Ajustes:
-    - Detecção automática de separador (read_csv_auto sem 'sep').
-    - Normalização de PRONTUARIO_ANONIMO e CODIGO_INTERNACAO.
+    - Normaliza PRONTUARIO_ANONIMO e CODIGO_INTERNACAO.
     - Procedimentos agregados por PRONTUARIO_ANONIMO (chave comum entre tabelas).
     """
     con = duckdb.connect(database=":memory:")
     evo, proc, cti = csv_paths
 
-    # Deixa o DuckDB detectar sep/encoding automaticamente
+    # Aqui mantive sep=';' porque é o mais comum no SUS/Oracle;
+    # se seus CSVs forem separados por vírgula, pode remover o sep.
     con.execute("""
         CREATE VIEW evolu AS
-        SELECT * FROM read_csv_auto(?, header=True, SAMPLE_SIZE=-1);
+        SELECT * FROM read_csv_auto(?, sep=';', header=True, SAMPLE_SIZE=-1);
     """, [evo])
 
     con.execute("""
         CREATE VIEW proced AS
-        SELECT * FROM read_csv_auto(?, header=True, SAMPLE_SIZE=-1);
+        SELECT * FROM read_csv_auto(?, sep=';', header=True, SAMPLE_SIZE=-1);
     """, [proc])
 
     con.execute("""
         CREATE VIEW cids AS
-        SELECT * FROM read_csv_auto(?, header=True, SAMPLE_SIZE=-1);
+        SELECT * FROM read_csv_auto(?, sep=';', header=True, SAMPLE_SIZE=-1);
     """, [cti])
 
     # normaliza chaves para lower/trim
@@ -126,7 +124,7 @@ def load_duckdb(csv_paths):
         FROM cids;
     """)
 
-    # Procedimentos agregados POR PRONTUARIO_ANONIMO (chave comum)
+    # Procedimentos agregados POR PRONTUARIO_ANONIMO (chave comum que liga as tabelas)
     con.execute("""
         CREATE VIEW proc_agg AS
         SELECT
@@ -141,8 +139,8 @@ def load_duckdb(csv_paths):
     """)
 
     # Dataset final:
-    # - EVOLU + CIDS: ainda usando (prontuario_anonimo, codigo_internacao) para não explodir internações
-    # - PROCED: anexado por prontuario_anonimo (chave que liga as tabelas)
+    # - EVOLU + CIDS: juntando por (prontuario_anonimo, codigo_internacao)
+    # - PROCED: anexado por prontuario_anonimo
     con.execute("""
         CREATE VIEW dataset AS
         SELECT
@@ -158,6 +156,130 @@ def load_duckdb(csv_paths):
 
 def df_from_duckdb(con, sql):
     return con.execute(sql).df()
+
+# -------------------- enriquecimento com tabelas auxiliares --------------------
+def enrich_with_aux_tables(df: pd.DataFrame,
+                           cid_file=None,
+                           sigtap_file=None,
+                           geo_file=None) -> pd.DataFrame:
+    """
+    Enriquecimento opcional com:
+    - CID-10 (capítulo / grupo / subcategoria)
+    - Procedimentos SIGTAP (grupo / subgrupo / forma organização)
+    - Tabela geográfica (UF / macro / região de saúde)
+
+    Todos são opcionais; se o arquivo não for enviado, nada quebra.
+    """
+    df_enriched = df.copy()
+
+    # -------- CID-10 --------
+    if cid_file is not None:
+        try:
+            cid_df = pd.read_csv(cid_file, dtype=str)
+            cid_df.columns = [c.lower() for c in cid_df.columns]
+
+            # tenta identificar coluna de código CID (ex: 'cid', 'codigo_cid', etc.)
+            cid_code_col = next(
+                (c for c in cid_df.columns if "cid" in c and "descricao" not in c),
+                None
+            )
+            if cid_code_col and "cid" in df_enriched.columns:
+                df_enriched["cid"] = (
+                    df_enriched["cid"].astype(str).str.strip().str.upper().str[:3]
+                )
+                cid_df[cid_code_col] = (
+                    cid_df[cid_code_col].astype(str).str.strip().str.upper().str[:3]
+                )
+
+                # tenta pegar colunas de capítulo / grupo / subcategoria / descrição
+                keep_cols = [cid_code_col]
+                keep_cols += [
+                    c for c in cid_df.columns
+                    if any(k in c for k in ["capit", "grupo", "subcat", "subcategoria", "desc"])
+                ]
+                cid_small = cid_df[keep_cols].drop_duplicates(subset=[cid_code_col])
+
+                df_enriched = df_enriched.merge(
+                    cid_small,
+                    how="left",
+                    left_on="cid",
+                    right_on=cid_code_col
+                )
+        except Exception as e:
+            st.warning(f"Não foi possível enriquecer com CID-10: {e}")
+
+    # -------- Procedimentos (SIGTAP) --------
+    if sigtap_file is not None:
+        try:
+            sig_df = pd.read_csv(sigtap_file, dtype=str)
+            sig_df.columns = [c.lower() for c in sig_df.columns]
+
+            # identifica código de procedimento no SIGTAP
+            sig_code_col = next(
+                (c for c in sig_df.columns
+                 if "proced" in c and ("cod" in c or "codigo" in c)),
+                None
+            )
+
+            # coluna de proc no dataset principal
+            proc_col = None
+            for cand in ["proc_prim", "codigo_procedimento", "cod_procedimento"]:
+                if cand in df_enriched.columns:
+                    proc_col = cand
+                    break
+
+            if sig_code_col and proc_col:
+                df_enriched[proc_col] = df_enriched[proc_col].astype(str).str.strip()
+                sig_df[sig_code_col] = sig_df[sig_code_col].astype(str).str.strip()
+
+                keep_cols = [sig_code_col]
+                keep_cols += [
+                    c for c in sig_df.columns
+                    if any(k in c for k in ["grupo", "subgrupo", "forma", "nome"])
+                ]
+                sig_small = sig_df[keep_cols].drop_duplicates(subset=[sig_code_col])
+
+                df_enriched = df_enriched.merge(
+                    sig_small,
+                    how="left",
+                    left_on=proc_col,
+                    right_on=sig_code_col
+                )
+        except Exception as e:
+            st.warning(f"Não foi possível enriquecer com SIGTAP: {e}")
+
+    # -------- Geografia (UF / Macro / Região de Saúde) --------
+    if geo_file is not None:
+        try:
+            geo_df = pd.read_csv(geo_file, dtype=str)
+            geo_df.columns = [c.lower() for c in geo_df.columns]
+
+            if "cidade_moradia" in df_enriched.columns:
+                df_enriched["cidade_moradia"] = (
+                    df_enriched["cidade_moradia"]
+                    .astype(str).str.upper().str.strip()
+                )
+
+                mun_col = next(
+                    (c for c in geo_df.columns
+                     if "municip" in c and ("nome" in c or "município" in c)),
+                    None
+                )
+                if mun_col:
+                    geo_df[mun_col] = (
+                        geo_df[mun_col].astype(str).str.upper().str.strip()
+                    )
+
+                    df_enriched = df_enriched.merge(
+                        geo_df,
+                        how="left",
+                        left_on="cidade_moradia",
+                        right_on=mun_col
+                    )
+        except Exception as e:
+            st.warning(f"Não foi possível enriquecer com regiões de saúde: {e}")
+
+    return df_enriched
 
 # -------------------- funções de base --------------------
 def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
@@ -419,298 +541,5 @@ if df is None or df.empty:
     st.info("Carregue um Parquet único **ou** os 3 CSVs.")
     st.stop()
 
-# -------------------- filtros e bases --------------------
-f = build_filters(df)
-df_f = apply_filters(df, f)          # eventos (AIHs) filtrados
-df_pac = pacientes_unicos(df_f)     # 1 linha por paciente filtrado
-
-# mostra filtros ativos no corpo da página
-show_active_filters(f)
-st.divider()
-
-# toggle de análise
-modo_perfil = st.toggle(
-    "Contar por **paciente único** (perfil). Desative para **internações**.",
-    value=True
-)
-base = df_pac if modo_perfil else df_f
-
-# -------------------- KPIs --------------------
-pacientes, internacoes, tmi, mort_hosp = kpis(df_f, df_pac)
-ri_proc = reinternacao_30d_pos_proced(df_f)
-ri_alta = reinternacao_30d_pos_alta(df_f)
-
-k1,k2,k3,k4,k5,k6 = st.columns(6)
-k1.metric("Pacientes (distintos)",
-          f"{int(pacientes):,}".replace(",",".") if pd.notna(pacientes) else "—")
-k2.metric("Internações",
-          f"{int(internacoes):,}".replace(",",".") if pd.notna(internacoes) else "—")
-k3.metric("Tempo médio de internação (dias)",
-          f"{tmi:.1f}" if pd.notna(tmi) else "—")
-k4.metric("Reinternação 30d (procedimento)",
-          f"{ri_proc:.1f}%" if pd.notna(ri_proc) else "—")
-k5.metric("Reinternação 30d (alta)",
-          f"{ri_alta:.1f}%" if pd.notna(ri_alta) else "—")
-k6.metric("Mortalidade hospitalar",
-          f"{mort_hosp:.1f}%" if pd.notna(mort_hosp) else "—")
-
-st.divider()
-
-# -------------------- "Abas" de indicador + comparativo anual --------------------
-st.markdown("### Indicadores principais")
-
-indicador_top = st.radio(
-    "Selecione o indicador para o comparativo anual:",
-    ["Quantidade de pacientes", "Quantidade de internações"],
-    horizontal=True,
-    key="ind_top"
-)
-
-ano_col = (
-    "ano_internacao" if "ano_internacao" in df_f.columns
-    else ("ano" if "ano" in df_f.columns else None)
-)
-
-if ano_col:
-    df_year = df_f[~df_f[ano_col].isna()].copy()
-    if not df_year.empty:
-        grp = df_year.groupby(ano_col)
-
-        if indicador_top == "Quantidade de pacientes":
-            if "prontuario_anonimo" in df_year.columns:
-                serie = grp["prontuario_anonimo"].nunique()
-            else:
-                serie = grp.size()
-            y_label = "Pacientes distintos"
-        else:  # Quantidade de internações
-            if "codigo_internacao" in df_year.columns:
-                serie = grp["codigo_internacao"].nunique()
-            else:
-                serie = grp.size()
-            y_label = "Internações"
-
-        df_plot = serie.reset_index(name="valor").sort_values(ano_col)
-        fig_ano = px.bar(df_plot, x=ano_col, y="valor", text_auto=True)
-        fig_ano.update_layout(
-            xaxis_title="Ano",
-            yaxis_title=y_label,
-            height=280,
-            margin=dict(t=40, b=40)
-        )
-        st.plotly_chart(fig_ano, use_container_width=True)
-    else:
-        st.info("Sem dados para o comparativo anual com os filtros atuais.")
-else:
-    st.info("Coluna de ano não encontrada no dataset.")
-
-st.divider()
-
-# -------------------- GRID PRINCIPAL--------------------
-col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
-
-# ========= COLUNA ESQUERDA =========
-with col_esq:
-    # linha Sexo + Caráter de Atendimento
-    c1, c2 = st.columns(2)
-
-    with c1:
-        st.subheader("Sexo")
-        if "sexo" in base.columns:
-            df_sexo = base.value_counts("sexo").rename("cont").reset_index()
-            fig = px.bar(df_sexo, x="sexo", y="cont", text_auto=True)
-            fig.update_layout(
-                height=230,
-                margin=dict(t=40, b=30)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Coluna 'sexo' não encontrada.")
-
-    with c2:
-        # Caráter de atendimento (se existir)
-        carater_col = None
-        for cand in [
-            "carater_atendimento","caracter_atendimento","carater",
-            "caráter_atendimento","carater_atend"
-        ]:
-            if cand in df_f.columns:
-                carater_col = cand
-                break
-
-        st.subheader("Caráter do atendimento")
-        if carater_col:
-            ordem = df_f[carater_col].value_counts().index.tolist()
-            df_car = df_f.value_counts(carater_col).rename("cont").reset_index()
-            fig = px.bar(
-                df_car, x=carater_col, y="cont", text_auto=True,
-                category_orders={carater_col: ordem}
-            )
-            fig.update_layout(
-                height=230,
-                xaxis_title="",
-                margin=dict(t=40, b=80)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Coluna de 'caráter do atendimento' não encontrada.")
-
-    # Pirâmide etária
-    st.subheader("Pirâmide etária")
-    if {"idade","sexo","faixa_etaria"}.issubset(base.columns):
-        tmp = (
-            base.dropna(subset=["faixa_etaria","sexo"])
-                .groupby(["faixa_etaria","sexo"])
-                .size().reset_index(name="n")
-        )
-        male = tmp[tmp["sexo"].eq("Masculino")].set_index("faixa_etaria")["n"].reindex(
-            base["faixa_etaria"].cat.categories, fill_value=0
-        )
-        female = tmp[tmp["sexo"].eq("Feminino")].set_index("faixa_etaria")["n"].reindex(
-            base["faixa_etaria"].cat.categories, fill_value=0
-        )
-        fig = go.Figure()
-        fig.add_bar(
-            y=male.index.astype(str), x=-male.values,
-            name="Masculino", orientation="h"
-        )
-        fig.add_bar(
-            y=female.index.astype(str), x=female.values,
-            name="Feminino", orientation="h"
-        )
-        fig.update_layout(
-            barmode="overlay",
-            xaxis=dict(title="Pacientes (neg=M)"),
-            yaxis=dict(title="Faixa etária"),
-            height=380,
-            margin=dict(t=40, b=40)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Requer colunas 'idade', 'sexo' e 'faixa_etaria'.")
-
-# ========= COLUNA DO MEIO =========
-with col_meio:
-    st.subheader("Estado / Região de residência do paciente")
-
-    if "cidade_moradia" in base.columns:
-        df_geo = base.dropna(subset=["cidade_moradia"]).copy()
-        df_geo["Pacientes/Internações"] = 1
-
-        estado_col = next(
-            (c for c in df_geo.columns if c.lower() in
-             ["estado_residencia","uf_residencia","uf","estado","sigla_uf"]),
-            None
-        )
-        regiao_col = next(
-            (c for c in df_geo.columns
-             if "regiao" in c.lower() and "saude" in c.lower()),
-            None
-        )
-
-        path_cols = []
-        if estado_col: path_cols.append(estado_col)
-        if regiao_col: path_cols.append(regiao_col)
-        path_cols.append("cidade_moradia")
-
-        fig = px.treemap(
-            df_geo,
-            path=path_cols,
-            values="Pacientes/Internações"
-        )
-        fig.update_layout(
-            height=500,
-            margin=dict(t=40, l=0, r=0, b=0)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption(
-            "Use os filtros de Estado / Região de saúde / Município "
-            "para refinar a distribuição."
-        )
-    else:
-        st.info("Coluna 'cidade_moradia' não encontrada.")
-
-    # Raça × Sexo
-    st.subheader("Raça/Cor × Sexo")
-    if {"etnia","sexo"}.issubset(base.columns):
-        df_etnia = (
-            base.value_counts(["etnia","sexo"])
-                .rename("cont").reset_index()
-        )
-        fig = px.bar(
-            df_etnia, x="etnia", y="cont", color="sexo",
-            barmode="group", text_auto=True
-        )
-        fig.update_layout(
-            xaxis_title="Raça/Cor",
-            yaxis_title="Pacientes/Internações",
-            height=320,
-            margin=dict(t=40, b=80)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Requer colunas 'etnia' e 'sexo'.")
-
-# ========= COLUNA DIREITA =========
-with col_dir:
-    # Card grande de quantidade de pacientes
-    st.subheader("Quantidade de pacientes")
-    st.markdown(
-        f"<h2 style='text-align:center;'>{int(pacientes):,}</h2>".replace(",","."),
-        unsafe_allow_html=True
-    )
-    st.caption("Pacientes distintos no período filtrado")
-
-    st.markdown("---")
-
-    # Procedimentos (top N)
-    st.subheader("Procedimentos (amostra)")
-    proc_cols = [
-        c for c in base.columns
-        if "proc_nome_prim" in c or c.lower() == "procedimento"
-    ]
-    if proc_cols:
-        pcol = proc_cols[0]
-        top_proc = (
-            base[pcol].dropna().astype(str)
-                .value_counts().head(10).reset_index()
-        )
-        top_proc.columns = ["Procedimento", "Pacientes/Internações"]
-        fig = px.bar(
-            top_proc, x="Procedimento", y="Pacientes/Internações", text_auto=True
-        )
-        fig.update_layout(
-            xaxis_tickangle=-35,
-            height=260,
-            margin=dict(t=40, b=120)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Não encontrei coluna de procedimento agregada.")
-
-    st.markdown("---")
-
-    # Grupo / categorias CID-10
-    st.subheader("Grupo e categorias de CID-10 (amostra)")
-    cid_col = [
-        c for c in df_f.columns
-        if ("cid" in c.lower() or "descricao" in c.lower()
-            or "to_charsubstrievdescricao14000" in c.lower())
-    ]
-    if cid_col:
-        col_cid = cid_col[0]
-        top = (
-            df_f[col_cid].dropna().astype(str).str.upper().str[:50]
-                .value_counts().head(10).reset_index()
-        )
-        top.columns = ["CID/Descrição (amostra)", "Frequência"]
-        fig = px.bar(
-            top, x="CID/Descrição (amostra)", y="Frequência", text_auto=True
-        )
-        fig.update_layout(
-            xaxis_tickangle=-35,
-            height=260,
-            margin=dict(t=40, b=120)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Não encontrei coluna de CID/descrição no dataset.")
+# -------- uploads das tabelas auxiliares --------
+with st.expander
