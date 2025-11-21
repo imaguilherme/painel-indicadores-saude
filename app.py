@@ -178,40 +178,67 @@ def enrich_with_aux_tables(df: pd.DataFrame,
 
     df_enriched = df.copy()
 
-    # -------- CID-10 --------
+      # -------- CID-10 --------
     if cid_file is not None:
         try:
             cid_df = pd.read_csv(cid_file, dtype=str)
             cid_df.columns = [c.lower() for c in cid_df.columns]
 
-            # tenta identificar coluna de código CID
+            # coluna de código no dicionário (ex.: "cid da tabela do vincula")
             cid_code_col = next(
-                (c for c in cid_df.columns if "cid" in c and "descricao" not in c),
+                (c for c in cid_df.columns if "cid" in c),
                 None
             )
-            if cid_code_col and "cid" in df_enriched.columns:
-                df_enriched["cid"] = (
-                    df_enriched["cid"].astype(str).str.strip().str.upper().str[:3]
+
+            if cid_code_col and ("cid" in df_enriched.columns or "cids" in df_enriched.columns):
+                # garante coluna 'cid' (principal) no dataset, se vier apenas 'cids'
+                if "cid" not in df_enriched.columns and "cids" in df_enriched.columns:
+                    df_enriched["cid"] = (
+                        df_enriched["cids"].astype(str)
+                        .str.split(",")
+                        .str[0]
+                        .str.strip()
+                        .str.upper()
+                    )
+
+                # reduz tudo para categoria de 3 caracteres (ex.: I21.0 -> I21)
+                df_enriched["cid3"] = (
+                    df_enriched["cid"].astype(str)
+                    .str.strip().str.upper().str[:3]
                 )
-                cid_df[cid_code_col] = (
-                    cid_df[cid_code_col].astype(str).str.strip().str.upper().str[:3]
+                cid_df["cid3"] = (
+                    cid_df[cid_code_col].astype(str)
+                    .str.strip().str.upper().str[:3]
                 )
 
-                keep_cols = [cid_code_col]
+                # mantemos apenas capítulo e grupo por categoria
+                keep_cols = ["cid3"]
                 keep_cols += [
                     c for c in cid_df.columns
-                    if any(k in c for k in ["capit", "grupo", "subcat", "subcategoria", "desc"])
+                    if any(k in c for k in ["capítulo", "capitulo", "grupo"])
                 ]
-                cid_small = cid_df[keep_cols].drop_duplicates(subset=[cid_code_col])
+                cid_small = cid_df[keep_cols].drop_duplicates(subset=["cid3"])
 
                 df_enriched = df_enriched.merge(
                     cid_small,
                     how="left",
-                    left_on="cid",
-                    right_on=cid_code_col
+                    on="cid3"
                 )
+
+                # renomeia para nomes amigáveis
+                rename_cols = {}
+                for c in df_enriched.columns:
+                    cl = c.lower()
+                    if "capítulo" in cl or "capitulo" in cl:
+                        rename_cols[c] = "cid_capitulo"
+                    elif cl == "grupo":
+                        rename_cols[c] = "cid_grupo"
+                if rename_cols:
+                    df_enriched = df_enriched.rename(columns=rename_cols)
+
         except Exception as e:
             st.warning(f"Não foi possível enriquecer com CID-10: {e}")
+
 
     # -------- Procedimentos (SIGTAP) --------
     if sigtap_file is not None:
