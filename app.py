@@ -1,5 +1,5 @@
 # app.py — Painel de Indicadores (Pacientes / Internações)
-# Requisitos: streamlit, pandas, numpy, plotly, duckdb, python-dateutil, pyarrow
+# Requisitos: streamlit, pandas, numpy, plotly, python-dateutil, pyarrow, duckdb
 
 import streamlit as st
 import pandas as pd
@@ -9,17 +9,56 @@ from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
 import duckdb
+import io
 import os
 import tempfile
 
-st.set_page_config(page_title="Painel de Pacientes", layout="wide")
+st.set_page_config(page_title="Painel de Indicadores de Pacientes", layout="wide")
 
-# --------------------------------------------------------------------
-# FUNÇÕES DE CARGA E PRÉ-PROCESSAMENTO
-# --------------------------------------------------------------------
+
+# ----------------------------------------
+# Funções de suporte
+# ----------------------------------------
+@st.cache_data(show_spinner=False)
+def _load_csv_or_excel(uploaded_file) -> pd.DataFrame:
+    """Carrega CSV ou Excel, tentando inferir o separador."""
+
+    filename = uploaded_file.name.lower()
+
+    if filename.endswith(".parquet"):
+        return pd.read_parquet(uploaded_file)
+
+    if filename.endswith(".xlsx") or filename.endswith(".xls"):
+        return pd.read_excel(uploaded_file)
+
+    # caso seja CSV ou outro texto, usamos pandas.read_csv e heurística de separador
+    # tenta ; depois , depois \t
+    content = uploaded_file.read()
+    uploaded_file.seek(0)
+
+    try:
+        df = pd.read_csv(io.BytesIO(content), sep=";")
+        if df.shape[1] == 1:
+            # Possível separador diferente
+            df = pd.read_csv(io.BytesIO(content), sep=",")
+        if df.shape[1] == 1:
+            df = pd.read_csv(io.BytesIO(content), sep="\t")
+    except Exception:
+        # tenta o default
+        df = pd.read_csv(io.BytesIO(content))
+
+    return df
+
+
+def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Padroniza nomes de colunas (minúsculas, sem espaços extras)."""
+    df = df.copy()
+    df.columns = [c.strip().lower() for c in df.columns]
+    return df
 
 
 def _post_load(df: pd.DataFrame) -> pd.DataFrame:
+    """Ajustes pós-carregamento: datas, tipos numéricos, faixas etárias, etc."""
     df = df.copy()
     df.columns = [c.lower() for c in df.columns]
 
@@ -56,18 +95,18 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     if "idade" in df.columns:
         bins = [
             -1,
-            0,
-            8,
-            17,
-            26,
-            35,
-            44,
-            53,
-            62,
-            71,
-            80,
-            89,
-            200,
+            0,  # < 1 ano
+            8,  # 01 a 08 anos
+            17,  # 09 a 17 anos
+            26,  # 18 a 26 anos
+            35,  # 27 a 35 anos
+            44,  # 36 a 44 anos
+            53,  # 45 a 53 anos
+            62,  # 54 a 62 anos
+            71,  # 63 a 71 anos
+            80,  # 72 a 80 anos
+            89,  # 81 a 89 anos
+            200,  # 90 anos ou mais
         ]
 
         labels = [
@@ -95,7 +134,13 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
 
     # ----------------- deduplicação -----------------
     keys = [
-        c for c in ["codigo_internacao", "prontuario_anonimo", "data_internacao", "data_alta"]
+        c
+        for c in [
+            "codigo_internacao",
+            "prontuario_anonimo",
+            "data_internacao",
+            "data_alta",
+        ]
         if c in df.columns
     ]
     if keys:
@@ -104,884 +149,916 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(show_spinner=False)
-def load_parquet(file):
-    return _post_load(pd.read_parquet(file))
+def _describe_missing(df: pd.DataFrame) -> pd.DataFrame:
+    """Tabela de percentuais de missing por coluna."""
+    total = len(df)
+    missing = df.isna().sum()
+    perc = (missing / total) * 100
+    out = pd.DataFrame(
+        {"coluna": df.columns, "missing": missing.values, "perc_missing": perc.values}
+    )
+    out = out.sort_values("perc_missing", ascending=False)
+    return out
 
 
-
+# Para permitir que o usuário use DuckDB com 3 CSVs ou 1 parquet único
 @st.cache_resource(show_spinner=False)
-def load_duckdb(csv_paths):
+def _load_with_duckdb(files) -> pd.DataFrame:
     """
-    Carrega EVOLUÇÕES, PROCEDIMENTOS e CIDS via DuckDB
-    e monta a view 'dataset' ligada por PRONTUARIO_ANONIMO.
+    Carrega múltiplos CSVs grandes ou um parquet usando duckdb e concatena.
+    files: lista de UploadedFile
     """
+    if not files:
+        return pd.DataFrame()
+
+    # Se for um arquivo só e for parquet
+    if len(files) == 1 and files[0].name.lower().endswith(".parquet"):
+        df = pd.read_parquet(files[0])
+        return _post_load(_normalize_columns(df))
+
+    # Caso geral: 1 ou mais CSV/XLSX utilizando DuckDB
     con = duckdb.connect(database=":memory:")
-    evo, proc, cti = csv_paths
+    dfs = []
 
-    def make_view(view_name: str, path: str):
-        path_esc = str(path).replace("'", "''")
-        con.execute(
-            f"""
-            CREATE VIEW {view_name} AS
-            SELECT *
-            FROM read_csv_auto(
-                '{path_esc}',
-                header      = TRUE,
-                delim       = ',',
-                encoding    = 'utf-8',
-                auto_detect = TRUE,
-                ignore_errors = TRUE,
-                sample_size = -1
-            );
-            """
-        )
+    tmpdir = tempfile.mkdtemp()
+    for idx, f in enumerate(files):
+        fname = f.name.lower()
+        full_path = os.path.join(tmpdir, f"file_{idx}_{fname}")
+        with open(full_path, "wb") as fp:
+            fp.write(f.read())
 
-    # cria as 3 views brutas
-    make_view("evolu", evo)
-    make_view("proced", proc)
-    make_view("cids", cti)
-
-    # normaliza prontuário e agrega procedimentos
-    con.execute(
-        """
-        CREATE VIEW evolu_n AS
-        SELECT
-            lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            *
-        FROM evolu;
-
-        CREATE VIEW cids_n AS
-        SELECT
-            lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            *
-        FROM cids;
-
-        CREATE VIEW proc_n AS
-        SELECT
-            lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            *
-        FROM proced;
-
-        -- agregação por prontuário para não multiplicar linhas
-        CREATE VIEW proc_agg AS
-        SELECT
-            prontuario_anonimo,
-            COUNT(*)                        AS n_proced,
-            ANY_VALUE(codigo_procedimento)  AS proc_prim,
-            ANY_VALUE(procedimento)         AS proc_nome_prim,
-            ANY_VALUE(natureza_agend)       AS natureza_agend
-        FROM proc_n
-        GROUP BY prontuario_anonimo;
-
-        -- dataset final
-        CREATE VIEW dataset AS
-        SELECT
-            e.*,
-            c.* EXCLUDE (prontuario_anonimo),
-            p.*
-        FROM evolu_n e
-        LEFT JOIN cids_n  c USING (prontuario_anonimo)
-        LEFT JOIN proc_agg p USING (prontuario_anonimo);
-        """
-    )
-
-    return con
-
-
-
-
-def df_from_duckdb(con, sql: str) -> pd.DataFrame:
-    return con.execute(sql).df()
-
-
-# --------------------------------------------------------------------
-# ENRIQUECIMENTO COM TABELAS AUXILIARES (CID, SIGTAP, GEO)
-# --------------------------------------------------------------------
-
-
-def enrich_with_aux_tables(df: pd.DataFrame, cid_file=None, sigtap_file=None, geo_file=None) -> pd.DataFrame:
-    """
-    Enriquecimento opcional com:
-    - CID-10 (capítulo / grupo)
-    - Procedimentos SIGTAP (grupo / subgrupo / forma org.)
-    - Geografia (UF / macro / região de saúde)
-    """
-    if df is None:
-        return df
-
-    df_enriched = df.copy()
-
-    # -------- CID-10 --------
-    if cid_file is not None:
-        try:
-            cid_df = pd.read_csv(cid_file, dtype=str)
-            cid_df.columns = [c.lower() for c in cid_df.columns]
-
-            cid_code_col = next((c for c in cid_df.columns if "cid" in c), None)
-
-            if cid_code_col and ("cid" in df_enriched.columns or "cids" in df_enriched.columns):
-                if "cid" not in df_enriched.columns and "cids" in df_enriched.columns:
-                    df_enriched["cid"] = (
-                        df_enriched["cids"]
-                        .astype(str)
-                        .str.split(",")
-                        .str[0]
-                        .str.strip()
-                        .str.upper()
-                    )
-
-                df_enriched["cid3"] = (
-                    df_enriched["cid"].astype(str).str.strip().str.upper().str[:3]
-                )
-                cid_df["cid3"] = (
-                    cid_df[cid_code_col].astype(str).str.strip().str.upper().str[:3]
-                )
-
-                keep_cols = ["cid3"]
-                keep_cols += [
-                    c
-                    for c in cid_df.columns
-                    if any(k in c for k in ["capítulo", "capitulo", "grupo"])
-                ]
-                cid_small = cid_df[keep_cols].drop_duplicates(subset=["cid3"])
-
-                df_enriched = df_enriched.merge(cid_small, how="left", on="cid3")
-
-                rename_cols = {}
-                for c in df_enriched.columns:
-                    cl = c.lower()
-                    if "capítulo" in cl or "capitulo" in cl:
-                        rename_cols[c] = "cid_capitulo"
-                    elif cl == "grupo":
-                        rename_cols[c] = "cid_grupo"
-                if rename_cols:
-                    df_enriched = df_enriched.rename(columns=rename_cols)
-        except Exception as e:
-            st.warning(f"Não foi possível enriquecer com CID-10: {e}")
-
-    # -------- Procedimentos (SIGTAP) --------
-    if sigtap_file is not None:
-        try:
-            sig_df = pd.read_csv(sigtap_file, dtype=str)
-            sig_df.columns = [c.lower() for c in sig_df.columns]
-
-            sig_code_col = next(
-                (c for c in sig_df.columns if "proced" in c and ("cod" in c or "codigo" in c)),
-                None,
-            )
-
-            proc_col = None
-            for cand in ["proc_prim", "codigo_procedimento", "cod_procedimento"]:
-                if cand in df_enriched.columns:
-                    proc_col = cand
-                    break
-
-            if sig_code_col and proc_col:
-                df_enriched[proc_col] = df_enriched[proc_col].astype(str).str.strip()
-                sig_df[sig_code_col] = sig_df[sig_code_col].astype(str).str.strip()
-
-                keep_cols = [sig_code_col]
-                keep_cols += [
-                    c
-                    for c in sig_df.columns
-                    if any(k in c for k in ["grupo", "subgrupo", "forma", "nome"])
-                ]
-                sig_small = sig_df[keep_cols].drop_duplicates(subset=[sig_code_col])
-
-                df_enriched = df_enriched.merge(
-                    sig_small,
-                    how="left",
-                    left_on=proc_col,
-                    right_on=sig_code_col,
-                )
-        except Exception as e:
-            st.warning(f"Não foi possível enriquecer com SIGTAP: {e}")
-
-    # -------- Geografia (UF / Macro / Região de Saúde) --------
-    if geo_file is not None:
-        try:
-            geo_df = pd.read_csv(geo_file, dtype=str)
-            geo_df.columns = [c.lower() for c in geo_df.columns]
-
-            if "cidade_moradia" in df_enriched.columns and {"no_municipio", "sg_uf"}.issubset(
-                geo_df.columns
-            ):
-                # CIDADE_MORADIA está no formato "cidade, UF"
-                partes = (
-                    df_enriched["cidade_moradia"].astype(str).str.split(",", n=1, expand=True)
-                )
-                df_enriched["cidade_nome_norm"] = partes[0].str.upper().str.strip()
-                if partes.shape[1] > 1:
-                    df_enriched["uf_from_cidade"] = partes[1].str.upper().str.strip()
-                else:
-                    df_enriched["uf_from_cidade"] = np.nan
-
-                geo_df["no_municipio_norm"] = (
-                    geo_df["no_municipio"].astype(str).str.upper().str.strip()
-                )
-                geo_df["sg_uf"] = geo_df["sg_uf"].astype(str).str.upper().str.strip()
-
-                geo_small = geo_df[
-                    ["no_municipio_norm", "sg_uf", "no_macrorregional", "no_cir_padrao"]
-                ].drop_duplicates(subset=["no_municipio_norm", "sg_uf"])
-
-                df_enriched = df_enriched.merge(
-                    geo_small,
-                    how="left",
-                    left_on=["cidade_nome_norm", "uf_from_cidade"],
-                    right_on=["no_municipio_norm", "sg_uf"],
-                )
-
-                df_enriched = df_enriched.rename(
-                    columns={
-                        "sg_uf": "uf",
-                        "no_macrorregional": "macroregiao",
-                        "no_cir_padrao": "regiao_saude",
-                    }
-                )
-
-                df_enriched = df_enriched.drop(
-                    columns=["cidade_nome_norm", "no_municipio_norm"],
-                    errors="ignore",
-                )
-        except Exception as e:
-            st.warning(f"Não foi possível enriquecer com regiões de saúde: {e}")
-
-    return df_enriched
-
-
-# --------------------------------------------------------------------
-# FUNÇÕES DE MÉTRICAS / KPI
-# --------------------------------------------------------------------
-
-
-def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
-    if {"prontuario_anonimo", "data_internacao"}.issubset(df.columns):
-        return (
-            df.sort_values(["prontuario_anonimo", "data_internacao"])
-            .groupby("prontuario_anonimo", as_index=False)
-            .tail(1)
-        )
-    if "prontuario_anonimo" in df.columns:
-        return df.drop_duplicates(subset=["prontuario_anonimo"])
-    return df
-
-
-def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
-    pacientes = (
-        df_pacientes["prontuario_anonimo"].nunique()
-        if "prontuario_anonimo" in df_pacientes
-        else np.nan
-    )
-    internacoes = (
-        df_eventos["codigo_internacao"].nunique()
-        if "codigo_internacao" in df_eventos
-        else len(df_eventos)
-    )
-    tmi = (
-        df_eventos["dias_permanencia"]
-        .replace([np.inf, -np.inf], np.nan)
-        .dropna()
-        .mean()
-        if "dias_permanencia" in df_eventos
-        else np.nan
-    )
-
-    mort_hosp = np.nan
-    if {"data_internacao", "data_alta"}.issubset(df_eventos.columns):
-        e = df_eventos.copy()
-        if "data_obito" in e.columns:
-            e["obito_no_periodo"] = (
-                (e["data_obito"].notna())
-                & (e["data_obito"] >= e["data_internacao"])
-                & (e["data_obito"] <= (e["data_alta"] - pd.Timedelta(days=1)))
-            )
-        elif "evolucao" in e.columns:
-            e["obito_no_periodo"] = e["evolucao"].astype(str).str.contains(
-                "ÓBITO", case=False, na=False
-            )
+        if fname.endswith(".parquet"):
+            q = f"SELECT * FROM read_parquet('{full_path}')"
+        elif fname.endswith(".xlsx") or fname.endswith(".xls"):
+            q = f"SELECT * FROM st_read('{full_path}')"
         else:
-            e["obito_no_periodo"] = False
+            # CSV — tenta ; como separador; se falhar, tentamos outras abordagens
+            q = f"""
+            SELECT * FROM read_csv_auto('{full_path}', header=True, sep=';')
+            """
 
-        denom = (
-            e["codigo_internacao"].nunique()
-            if "codigo_internacao" in e
-            else len(e)
-        )
-        numer_df = e.loc[e["obito_no_periodo"]]
-        numer = (
-            numer_df["codigo_internacao"].nunique()
-            if "codigo_internacao" in e
-            else len(numer_df)
-        )
-        mort_hosp = (numer / denom * 100) if denom else np.nan
+        try:
+            df_tmp = con.execute(q).df()
+        except Exception:
+            # fallback: tenta inferência automática
+            q2 = f"SELECT * FROM read_csv_auto('{full_path}', header=True)"
+            df_tmp = con.execute(q2).df()
 
-    return pacientes, internacoes, tmi, mort_hosp
+        dfs.append(df_tmp)
 
+    if not dfs:
+        return pd.DataFrame()
 
-def reinternacao_30d_pos_proced(df: pd.DataFrame):
-    ok = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}.issubset(
-        df.columns
-    )
-    if not ok:
-        return np.nan
-    s = df.sort_values(["prontuario_anonimo", "data_internacao", "data_alta"]).copy()
-    s["next_dt_internacao"] = s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
-    s["delta_proc"] = (s["next_dt_internacao"] - s["data_internacao"]).dt.days
-    s["delta_pos_alta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
-    s["transfer"] = s["delta_pos_alta"] <= 1
-    base = s["codigo_internacao"].nunique()
-    numer = s[
-        s["delta_proc"].between(0, 30, inclusive="both") & (~s["transfer"])
-    ]["codigo_internacao"].nunique()
-    return (numer / base * 100) if base else np.nan
+    df_final = pd.concat(dfs, ignore_index=True)
+    df_final = _normalize_columns(df_final)
+    df_final = _post_load(df_final)
+
+    return df_final
 
 
-def reinternacao_30d_pos_alta(df: pd.DataFrame):
-    ok = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}.issubset(
-        df.columns
-    )
-    if not ok:
-        return np.nan
-    s = df.sort_values(["prontuario_anonimo", "data_internacao", "data_alta"]).copy()
-    s["next_dt_internacao"] = s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
-    s["delta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
-    s["transfer"] = s["delta"] <= 1
-    base = s["codigo_internacao"].nunique()
-    numer = s[
-        s["delta"].between(0, 30, inclusive="both") & (~s["transfer"])
-    ]["codigo_internacao"].nunique()
-    return (numer / base * 100) if base else np.nan
+# ----------------------------------------
+# Layout principal
+# ----------------------------------------
+st.title("📊 Painel de Indicadores de Pacientes / Internações")
 
-
-# --------------------------------------------------------------------
-# FILTROS
-# --------------------------------------------------------------------
-
-
-def build_filters(df: pd.DataFrame):
-    if df is None:
-        st.error("Dataset não carregado.")
-        st.stop()
-
-    st.sidebar.header("Filtros")
-
-    anos_col = "ano_internacao" if "ano_internacao" in df.columns else ("ano" if "ano" in df.columns else None)
-    if anos_col:
-        anos = sorted(df[anos_col].dropna().unique().tolist())
-    else:
-        anos = []
-    ano_sel = st.sidebar.multiselect("Ano da internação", anos, default=anos)
-
-    if "idade" in df.columns and df["idade"].notna().any():
-        idade_min, idade_max = int(np.nanmin(df["idade"])), int(np.nanmax(df["idade"]))
-    else:
-        idade_min, idade_max = 0, 120
-    idade_sel = st.sidebar.slider(
-        "Idade", min_value=0, max_value=max(idade_max, 1), value=(idade_min, idade_max), step=1
+with st.expander("ℹ️ Instruções de uso", expanded=False):
+    st.markdown(
+        """
+- Carregue **1 arquivo parquet grande** OU até **3 arquivos CSV/XLSX** contendo dados de pacientes/internações.
+- As colunas de referência esperadas (quando existirem) são:
+  - `prontuario_anonimo`, `idade`, `sexo`, `municipio_residencia`, `data_internacao`, `data_alta`, `carater_atendimento`, etc.
+- Os gráficos são atualizados automaticamente conforme os filtros.
+"""
     )
 
-    estado_col = next(
-        (c for c in df.columns if c.lower() in ["estado_residencia", "uf_residencia", "uf", "estado", "sigla_uf"]),
-        None,
-    )
-    estados_sel = []
-    if estado_col:
-        estados = sorted(df[estado_col].dropna().astype(str).unique().tolist())
-        estados_sel = st.sidebar.multiselect("Estado de residência", estados, default=estados)
+uploaded_files = st.file_uploader(
+    "Carregue o(s) arquivo(s) de dados (Parquet, CSV ou Excel)",
+    type=["csv", "xlsx", "xls", "parquet"],
+    accept_multiple_files=True,
+)
 
-    regiao_col = next(
-        (c for c in df.columns if "regiao" in c.lower() and "saud" in c.lower()),
-        None,
-    )
-    regioes_sel = []
-    if regiao_col:
-        regioes = sorted(df[regiao_col].dropna().astype(str).unique().tolist())
-        regioes_sel = st.sidebar.multiselect("Região de saúde", regioes, default=regioes)
-
-    cidade_col = "cidade_moradia" if "cidade_moradia" in df.columns else None
-    cidades_sel = []
-    if cidade_col:
-        cidade_vals = sorted(df[cidade_col].dropna().astype(str).unique().tolist())
-        default_cidades = cidade_vals if len(cidade_vals) <= 25 else cidade_vals[:25]
-        cidades_sel = st.sidebar.multiselect(
-            "Município de residência (amostra)", cidade_vals, default=default_cidades
-        )
-
-    return {"ano": ano_sel, "idade": idade_sel, "estado": estados_sel, "regiao": regioes_sel, "cidade": cidades_sel}
-
-
-def apply_filters(df: pd.DataFrame, f):
-    if "ano_internacao" in df.columns and f["ano"]:
-        df = df[df["ano_internacao"].isin(f["ano"])]
-    elif "ano" in df.columns and f["ano"]:
-        df = df[df["ano"].isin(f["ano"])]
-
-    if "idade" in df.columns and f["idade"]:
-        df = df[(df["idade"] >= f["idade"][0]) & (df["idade"] <= f["idade"][1])]
-
-    estado_col = next(
-        (c for c in df.columns if c.lower() in ["estado_residencia", "uf_residencia", "uf", "estado", "sigla_uf"]),
-        None,
-    )
-    if estado_col and f["estado"]:
-        df = df[df[estado_col].isin(f["estado"])]
-
-    regiao_col = next(
-        (c for c in df.columns if "regiao" in c.lower() and "saud" in c.lower()),
-        None,
-    )
-    if regiao_col and f["regiao"]:
-        df = df[df[regiao_col].isin(f["regiao"])]
-
-    if "cidade_moradia" in df.columns and f["cidade"]:
-        df = df[df["cidade_moradia"].isin(f["cidade"])]
-
-    return df
-
-
-def show_active_filters(f):
-    partes = []
-    if f["ano"]:
-        partes.append("**Ano:** " + ", ".join(str(a) for a in f["ano"]))
-    if f["idade"]:
-        partes.append(f"**Idade:** {f['idade'][0]}–{f['idade'][1]} anos")
-    if f["estado"]:
-        partes.append("**Estado:** " + ", ".join(f["estado"]))
-    if f["regiao"]:
-        partes.append("**Região de saúde:** " + ", ".join(f["regiao"]))
-    if f["cidade"]:
-        partes.append("**Município:** " + ", ".join(f["cidade"]))
-    if partes:
-        st.markdown("**Filtros ativos:** " + " | ".join(partes))
-    else:
-        st.markdown("**Filtros ativos:** nenhum filtro aplicado.")
-
-
-# --------------------------------------------------------------------
-# INTERFACE
-# --------------------------------------------------------------------
-
-st.title("Perfil dos Pacientes")
-
-tab_parquet, tab_csv = st.tabs(["Parquet único (recomendado)", "3 CSVs (DuckDB)"])
-
-df = None
-
-with tab_parquet:
-    file_parquet = st.file_uploader(
-        "Carregue o Parquet único", type=["parquet"], key="pq"
-    )
-    if file_parquet:
-        df = load_parquet(file_parquet)
-
-with tab_csv:
-    c1, c2, c3 = st.columns(3)
-    evo = c1.file_uploader("EVOLUÇÕES (csv)", type=["csv"], key="evo")
-    proc = c2.file_uploader("PROCEDIMENTOS (csv)", type=["csv"], key="proc")
-    cti = c3.file_uploader("CIDs/UTI (csv)", type=["csv"], key="cti")
-    if evo and proc and cti:
-        tmpdir = tempfile.mkdtemp()
-        p_evo = os.path.join(tmpdir, "evo.csv")
-        p_proc = os.path.join(tmpdir, "proc.csv")
-        p_cti = os.path.join(tmpdir, "cti.csv")
-        open(p_evo, "wb").write(evo.getbuffer())
-        open(p_proc, "wb").write(proc.getbuffer())
-        open(p_cti, "wb").write(cti.getbuffer())
-        con = load_duckdb((p_evo, p_proc, p_cti))
-        df = df_from_duckdb(con, "SELECT * FROM dataset")
-        df = _post_load(df)
-
-if df is None or df.empty:
-    st.info("Carregue um Parquet ou os 3 CSVs para iniciar.")
+if not uploaded_files:
+    st.warning("Carregue ao menos um arquivo para iniciar a análise.")
     st.stop()
 
-with st.expander("Carregar tabelas auxiliares (opcional) – CID-10, SIGTAP e Regiões de Saúde"):
-    cid_file = st.file_uploader(
-        "Tabela de CIDs (LIST_CID_2019_2021_BINDED.csv)", type=["csv"], key="cid_map"
-    )
-    sigtap_file = st.file_uploader(
-        "Tabela de procedimentos SIGTAP (Matriz de Dados do SIGTAP.csv)", type=["csv"], key="sigtap_map"
-    )
-    geo_file = st.file_uploader(
-        "Tabela UF/Macro/Região/Município (UF_Macro_Região_Município.csv)", type=["csv"], key="geo_map"
-    )
+with st.spinner("Carregando e processando dados..."):
+    df = _load_with_duckdb(uploaded_files)
 
-if cid_file or sigtap_file or geo_file:
-    df = enrich_with_aux_tables(df, cid_file, sigtap_file, geo_file)
+if df.empty:
+    st.error("Não foi possível carregar dados a partir dos arquivos enviados.")
+    st.stop()
 
-# --------------------------------------------------------------------
-# FILTROS E BASES
-# --------------------------------------------------------------------
+st.success(f"Dados carregados com sucesso! Total de linhas: **{len(df):,}**.".replace(",", "."))
 
-f = build_filters(df)
-df_f = apply_filters(df, f)
-df_pac = pacientes_unicos(df_f)
+# Mostra algumas colunas
+with st.expander("👀 Visualizar amostra dos dados carregados"):
+    st.dataframe(df.head(50))
 
-show_active_filters(f)
-st.divider()
+# ----------------------------------------
+# Barra lateral — filtros globais
+# ----------------------------------------
+st.sidebar.header("🔎 Filtros Globais")
 
-modo_perfil = st.toggle(
-    "Contar por **paciente único** (perfil). Desative para **internações**.",
-    value=True,
-)
-base = df_pac if modo_perfil else df_f
-
-# --------------------------------------------------------------------
-# KPIs
-# --------------------------------------------------------------------
-
-pacientes, internacoes, tmi, mort_hosp = kpis(df_f, df_pac)
-ri_proc = reinternacao_30d_pos_proced(df_f)
-ri_alta = reinternacao_30d_pos_alta(df_f)
-
-k1, k2, k3, k4, k5, k6 = st.columns(6)
-k1.metric(
-    "Pacientes (distintos)",
-    f"{int(pacientes):,}".replace(",", ".") if pd.notna(pacientes) else "—",
-)
-k2.metric(
-    "Internações",
-    f"{int(internacoes):,}".replace(",", ".") if pd.notna(internacoes) else "—",
-)
-k3.metric(
-    "Tempo médio de internação (dias)",
-    f"{tmi:.1f}" if pd.notna(tmi) else "—",
-)
-k4.metric(
-    "Reinternação 30d (procedimento)",
-    f"{ri_proc:.1f}%" if pd.notna(ri_proc) else "—",
-)
-k5.metric(
-    "Reinternação 30d (alta)",
-    f"{ri_alta:.1f}%" if pd.notna(ri_alta) else "—",
-)
-k6.metric(
-    "Mortalidade hospitalar",
-    f"{mort_hosp:.1f}%" if pd.notna(mort_hosp) else "—",
-)
-
-st.divider()
-
-# --------------------------------------------------------------------
-# COMPARATIVO ANUAL
-# --------------------------------------------------------------------
-
-st.markdown("### Indicadores principais")
-
-indicador_top = st.radio(
-    "Selecione o indicador para o comparativo anual:",
-    ["Quantidade de pacientes", "Quantidade de internações"],
-    horizontal=True,
-    key="ind_top",
-)
-
-ano_col = (
-    "ano_internacao"
-    if "ano_internacao" in df_f.columns
-    else ("ano" if "ano" in df_f.columns else None)
-)
-
-if ano_col:
-    df_year = df_f[~df_f[ano_col].isna()].copy()
-    if not df_year.empty:
-        grp = df_year.groupby(ano_col)
-
-        if indicador_top == "Quantidade de pacientes":
-            if "prontuario_anonimo" in df_year.columns:
-                serie = grp["prontuario_anonimo"].nunique()
-            else:
-                serie = grp.size()
-            y_label = "Pacientes distintos"
-        else:
-            if "codigo_internacao" in df_year.columns:
-                serie = grp["codigo_internacao"].nunique()
-            else:
-                serie = grp.size()
-            y_label = "Internações"
-
-        df_plot = serie.reset_index(name="valor").sort_values(ano_col)
-        fig_ano = px.bar(df_plot, x=ano_col, y="valor", text_auto=True)
-        fig_ano.update_layout(
-            xaxis_title="Ano",
-            yaxis_title=y_label,
-            height=280,
-            margin=dict(t=40, b=40),
-        )
-       st.plotly_chart(fig_ano, width="stretch")
-    else:
-        st.info("Sem dados para o comparativo anual com os filtros atuais.")
+# Ano — detecta as colunas possíveis
+possible_year_cols = [c for c in ["ano", "ano_internacao"] if c in df.columns]
+year_col = None
+if possible_year_cols:
+    year_col = possible_year_cols[0]
+    anos_unicos = sorted([int(a) for a in df[year_col].dropna().unique()])
+    anos_sel = st.sidebar.multiselect("Ano da internação", anos_unicos, default=anos_unicos)
 else:
-    st.info("Coluna de ano não encontrada no dataset.")
+    anos_sel = None
 
-st.divider()
+# Faixa etária
+faixas_unicas = []
+if "faixa_etaria" in df.columns:
+    faixas_unicas = [str(x) for x in df["faixa_etaria"].dropna().unique()]
+    faixas_unicas = sorted(
+        faixas_unicas,
+        key=lambda x: [
+            "<" in x,
+            "".join([d for d in x if d.isdigit()]) or "0",
+        ],
+    )
 
-# --------------------------------------------------------------------
-# GRID PRINCIPAL (3 COLUNAS)
-# --------------------------------------------------------------------
+faixas_sel = (
+    st.sidebar.multiselect(
+        "Faixa etária",
+        faixas_unicas,
+        default=faixas_unicas if faixas_unicas else None,
+    )
+    if faixas_unicas
+    else None
+)
 
-col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
+# Sexo
+sexos_unicos = []
+if "sexo" in df.columns:
+    sexos_unicos = sorted(df["sexo"].dropna().astype(str).unique())
 
-# ============================
-# COLUNA ESQUERDA
-# ============================
-with col_esq:
-    c1, c2 = st.columns(2)
+sexos_sel = (
+    st.sidebar.multiselect(
+        "Sexo",
+        sexos_unicos,
+        default=sexos_unicos if sexos_unicos else None,
+    )
+    if sexos_unicos
+    else None
+)
 
-    # Sexo
-    with c1:
-        st.subheader("Sexo")
-        if "sexo" in base.columns:
-            df_sexo = base.value_counts("sexo").rename("cont").reset_index()
-            fig = px.bar(df_sexo, x="sexo", y="cont", text_auto=True)
-            fig.update_layout(height=230, margin=dict(t=40, b=30))
-            st.plotly_chart(fig, width="stretch")
-        else:
-            st.info("Coluna 'sexo' não encontrada.")
-
-    # Caráter do atendimento (usa NATUREZA_AGEND da tabela de procedimentos)
-    with c2:
-        st.subheader("Caráter do atendimento")
-
-        carater_col = None
-        for cand in [
-            "carater_atendimento",
-            "caracter_atendimento",
-            "carater",
-            "caráter_atendimento",
-            "carater_atend",
-            "natureza_agend",
-        ]:
-            if cand in df_f.columns:
-                carater_col = cand
-                break
-
-        if carater_col:
-            ordem = df_f[carater_col].value_counts().index.tolist()
-            df_car = df_f.value_counts(carater_col).rename("cont").reset_index()
-            fig = px.bar(
-                df_car,
-                x=carater_col,
-                y="cont",
-                text_auto=True,
-                category_orders={carater_col: ordem},
-            )
-            fig.update_layout(
-                height=230,
-                xaxis_title="",
-                margin=dict(t=40, b=80),
-            )
-            st.plotly_chart(fig, width="stretch")
-        else:
-            st.info("Coluna de 'caráter do atendimento' não encontrada.")
-
-    # PIRÂMIDE ETÁRIA (ESTILO RELATÓRIO)
-    st.subheader("Pirâmide Etária")
-    if {"faixa_etaria", "sexo"}.issubset(base.columns):
-        categorias = [
-            "90 anos ou mais",
-            "81 a 89 anos",
-            "72 a 80 anos",
-            "63 a 71 anos",
-            "54 a 62 anos",
-            "45 a 53 anos",
-            "36 a 44 anos",
-            "27 a 35 anos",
-            "18 a 26 anos",
-            "09 a 17 anos",
-            "01 a 08 anos",
-            "< 1 ano",
-        ]
-
-        df_pira = base.copy()
-        df_pira = df_pira[df_pira["faixa_etaria"].isin(categorias)]
-
-        tabela = (
-            df_pira.groupby(["faixa_etaria", "sexo"])
-            .size()
-            .reset_index(name="n")
-        )
-        pivot = tabela.pivot(index="faixa_etaria", columns="sexo", values="n").fillna(0)
-        pivot = pivot.reindex(categorias)
-
-        male = pivot.get("Masculino", pd.Series([0] * len(pivot)))
-        female = -pivot.get("Feminino", pd.Series([0] * len(pivot)))
-
-        fig = go.Figure()
-        cor_fem = "#DA83A3"
-        cor_masc = "#91A8C5"
-
-        fig.add_bar(
-            y=pivot.index,
-            x=female,
-            name="Feminino",
-            orientation="h",
-            marker_color=cor_fem,
-            text=pivot["Feminino"].astype(int),
-            textposition="outside",
-        )
-        fig.add_bar(
-            y=pivot.index,
-            x=male,
-            name="Masculino",
-            orientation="h",
-            marker_color=cor_masc,
-            text=pivot["Masculino"].astype(int),
-            textposition="outside",
-        )
-
-        fig.update_layout(
-            barmode="overlay",
-            height=550,
-            xaxis=dict(
-                title="Pacientes",
-                showgrid=False,
-            ),
-            yaxis=dict(title="Faixa etária", autorange="reversed"),
-            margin=dict(l=80, r=80, t=50, b=50),
-            showlegend=True,
-        )
-        st.plotly_chart(fig, width="stretch")
+# Município de residência
+mun_cols = [c for c in ["municipio_residencia", "mun_resid", "municipio"] if c in df.columns]
+mun_col_atual = mun_cols[0] if mun_cols else None
+mun_sel = None
+if mun_col_atual is not None:
+    municipios_unicos = sorted(df[mun_col_atual].dropna().astype(str).unique())
+    # opção de selecionar todos
+    st.sidebar.write("Municípios de residência")
+    select_all_mun = st.sidebar.checkbox("Selecionar todos", value=True)
+    if select_all_mun:
+        mun_sel = municipios_unicos
     else:
-        st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
-
-# ============================
-# COLUNA DO MEIO
-# ============================
-with col_meio:
-    st.subheader("Estado → Região de Saúde → Município de residência")
-
-    if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base.columns):
-        df_geo_plot = base.dropna(subset=["cidade_moradia"]).copy()
-        df_geo_plot["Pacientes/Internações"] = 1
-
-        fig = px.treemap(
-            df_geo_plot,
-            path=["uf", "regiao_saude", "cidade_moradia"],
-            values="Pacientes/Internações",
+        mun_sel = st.sidebar.multiselect(
+            "Escolha município(s)", municipios_unicos, default=[]
         )
-        fig.update_layout(height=550, margin=dict(t=40, l=0, r=0, b=0))
-        st.plotly_chart(fig, width="stretch")
-        st.caption(
-            "Hierarquia: Estado → Região de Saúde → Município. Use os filtros para refinar."
+
+# Caráter de atendimento
+carater_cols = [c for c in ["carater_atendimento", "carater_atend"] if c in df.columns]
+carater_col = carater_cols[0] if carater_cols else None
+carater_sel = None
+if carater_col:
+    carater_unicos = sorted(df[carater_col].dropna().astype(str).unique())
+    carater_sel = st.sidebar.multiselect(
+        "Caráter de atendimento",
+        carater_unicos,
+        default=carater_unicos,
+    )
+
+# Região de saúde / Estado se existirem
+regiao_cols = [c for c in ["regiao_saude", "regiao"] if c in df.columns]
+estado_cols = [c for c in ["estado", "uf"] if c in df.columns]
+
+regiao_col = regiao_cols[0] if regiao_cols else None
+estado_col = estado_cols[0] if estado_cols else None
+
+regiao_sel = None
+estado_sel = None
+
+if regiao_col:
+    regiao_unicas = sorted(df[regiao_col].dropna().astype(str).unique())
+    regiao_sel = st.sidebar.multiselect(
+        "Região de saúde",
+        regiao_unicas,
+        default=regiao_unicas,
+    )
+
+if estado_col:
+    estado_unicas = sorted(df[estado_col].dropna().astype(str).unique())
+    estado_sel = st.sidebar.multiselect(
+        "Estado (UF)",
+        estado_unicas,
+        default=estado_unicas,
+    )
+
+# Aplica filtros globais
+df_filtrado = df.copy()
+
+if anos_sel is not None and year_col:
+    df_filtrado = df_filtrado[df_filtrado[year_col].isin(anos_sel)]
+
+if faixas_sel is not None and "faixa_etaria" in df_filtrado.columns:
+    df_filtrado = df_filtrado[df_filtrado["faixa_etaria"].astype(str).isin(faixas_sel)]
+
+if sexos_sel is not None and "sexo" in df_filtrado.columns:
+    df_filtrado = df_filtrado[df_filtrado["sexo"].astype(str).isin(sexos_sel)]
+
+if mun_sel is not None and mun_col_atual:
+    df_filtrado = df_filtrado[df_filtrado[mun_col_atual].astype(str).isin(mun_sel)]
+
+if carater_sel is not None and carater_col:
+    df_filtrado = df_filtrado[df_filtrado[carater_col].astype(str).isin(carater_sel)]
+
+if regiao_sel is not None and regiao_col:
+    df_filtrado = df_filtrado[df_filtrado[regiao_col].astype(str).isin(regiao_sel)]
+
+if estado_sel is not None and estado_col:
+    df_filtrado = df_filtrado[df_filtrado[estado_col].astype(str).isin(estado_sel)]
+
+st.sidebar.markdown("---")
+
+# Mostrar resumo dos filtros
+st.sidebar.subheader("📌 Resumo dos filtros aplicados")
+filtros_ativos = []
+if anos_sel:
+    filtros_ativos.append(f"Ano(s): {', '.join(map(str, anos_sel))}")
+if faixas_sel:
+    filtros_ativos.append(f"Faixa(s) etária(s): {', '.join(map(str, faixas_sel))}")
+if sexos_sel:
+    filtros_ativos.append(f"Sexo(s): {', '.join(map(str, sexos_sel))}")
+if mun_sel:
+    filtros_ativos.append(f"Município(s): {', '.join(map(str, mun_sel))}")
+if carater_sel:
+    filtros_ativos.append(f"Caráter(es) de atendimento: {', '.join(map(str, carater_sel))}")
+if regiao_sel:
+    filtros_ativos.append(f"Região(ões) de saúde: {', '.join(map(str, regiao_sel))}")
+if estado_sel:
+    filtros_ativos.append(f"Estado(s): {', '.join(map(str, estado_sel))}")
+
+if filtros_ativos:
+    st.sidebar.write("\n".join(f"- {f}" for f in filtros_ativos))
+else:
+    st.sidebar.write("Nenhum filtro aplicado além do dataset completo.")
+
+# ----------------------------------------
+# Seções do painel
+# ----------------------------------------
+aba = st.tabs(
+    [
+        "📌 Visão Geral",
+        "👤 Perfil dos Pacientes",
+        "🏥 Internações e Evolução",
+        "🧩 Características Clínicas / CID",
+    ]
+)
+
+# ========================================
+# ABA 1 — VISÃO GERAL
+# ========================================
+with aba[0]:
+    st.header("📌 Visão Geral")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    # Total de pacientes (prontuários únicos)
+    if "prontuario_anonimo" in df_filtrado.columns:
+        total_pacientes = df_filtrado["prontuario_anonimo"].nunique()
+    else:
+        total_pacientes = df_filtrado.shape[0]
+
+    # Total de internações
+    if "codigo_internacao" in df_filtrado.columns:
+        total_internacoes = df_filtrado["codigo_internacao"].nunique()
+    else:
+        total_internacoes = df_filtrado.shape[0]
+
+    # Mortalidade hospitalar
+    if "morte_hospitalar" in df_filtrado.columns:
+        mort = df_filtrado["morte_hospitalar"].fillna(0)
+        total_obitos = (mort == 1).sum()
+        taxa_mortalidade = (total_obitos / len(df_filtrado)) * 100 if len(df_filtrado) > 0 else 0
+    else:
+        total_obitos = np.nan
+        taxa_mortalidade = np.nan
+
+    # Reinternação 30 dias
+    if "reinternado_30dias" in df_filtrado.columns:
+        rein = df_filtrado["reinternado_30dias"].fillna(0)
+        total_reint = (rein == 1).sum()
+        taxa_reint = (total_reint / len(df_filtrado)) * 100 if len(df_filtrado) > 0 else 0
+    else:
+        total_reint = np.nan
+        taxa_reint = np.nan
+
+    col1.metric("👤 Pacientes únicos", f"{total_pacientes:,}".replace(",", "."))
+    col2.metric("🏥 Internações", f"{total_internacoes:,}".replace(",", "."))
+    col3.metric(
+        "⚰️ Óbitos hospitalares",
+        f"{total_obitos if not np.isnan(total_obitos) else '-'}",
+        f"{taxa_mortalidade:.1f}%" if not np.isnan(taxa_mortalidade) else None,
+    )
+    col4.metric(
+        "🔁 Reinternações em 30 dias",
+        f"{total_reint if not np.isnan(total_reint) else '-'}",
+        f"{taxa_reint:.1f}%" if not np.isnan(taxa_reint) else None,
+    )
+
+    st.markdown("---")
+
+    # Evolução temporal — comparando anos
+    st.subheader("📈 Evolução anual de internações / pacientes")
+
+    indicador_top = st.selectbox(
+        "Indicador",
+        [
+            "Quantidade de internações",
+            "Quantidade de pacientes",
+            "Taxa de mortalidade hospitalar",
+            "Taxa de reinternação em 30 dias",
+        ],
+    )
+
+    # escolhe a melhor coluna de ano
+    ano_col = year_col
+    if ano_col is None:
+        # tenta extrair o ano de data_internacao se existir
+        if "data_internacao" in df_filtrado.columns:
+            df_filtrado["ano_tmp"] = df_filtrado["data_internacao"].dt.year
+            ano_col = "ano_tmp"
+
+    if ano_col is None:
+        st.info("Não há coluna de ano ou data para construir a evolução temporal.")
+    else:
+        df_year = df_filtrado.copy()
+        df_year = df_year[df_year[ano_col].notna()]
+        df_year[ano_col] = df_year[ano_col].astype(int)
+
+        if not df_year.empty:
+            grp = df_year.groupby(ano_col)
+
+            if indicador_top == "Quantidade de pacientes":
+                if "prontuario_anonimo" in df_year.columns:
+                    serie = grp["prontuario_anonimo"].nunique()
+                else:
+                    serie = grp.size()
+                label_y = "Pacientes únicos"
+            elif indicador_top == "Taxa de mortalidade hospitalar" and "morte_hospitalar" in df_year.columns:
+                mort = df_year["morte_hospitalar"].fillna(0)
+                df_year["eh_obito"] = (mort == 1).astype(int)
+                serie = grp["eh_obito"].mean() * 100
+                label_y = "Taxa de mortalidade (%)"
+            elif indicador_top == "Taxa de reinternação em 30 dias" and "reinternado_30dias" in df_year.columns:
+                rein = df_year["reinternado_30dias"].fillna(0)
+                df_year["eh_reint"] = (rein == 1).astype(int)
+                serie = grp["eh_reint"].mean() * 100
+                label_y = "Taxa de reinternação (%)"
+            else:
+                serie = grp.size()
+                label_y = "Internações"
+
+            fig_ano = px.line(
+                serie.reset_index(),
+                x=ano_col,
+                y=0,
+                markers=True,
+            )
+            fig_ano.update_layout(
+                xaxis_title="Ano",
+                yaxis_title=label_y,
+                title=indicador_top,
+            )
+            st.plotly_chart(fig_ano, width="stretch")
+        else:
+            st.info("Não há dados suficientes para gerar a série temporal.")
+
+# ========================================
+# ABA 2 — PERFIL DOS PACIENTES
+# ========================================
+with aba[1]:
+    st.header("👤 Perfil dos Pacientes")
+
+    col_p1, col_p2 = st.columns([1, 1])
+
+    # Distribuição por sexo
+    with col_p1:
+        st.subheader("Distribuição por sexo")
+
+        if "sexo" in df_filtrado.columns:
+            sexo_counts = (
+                df_filtrado["sexo"].fillna("Ignorado").astype(str).value_counts().reset_index()
+            )
+            sexo_counts.columns = ["sexo", "n"]
+
+            fig = px.bar(
+                sexo_counts,
+                x="sexo",
+                y="n",
+                text="n",
+            )
+            fig.update_traces(textposition="outside")
+            fig.update_layout(
+                xaxis_title="Sexo",
+                yaxis_title="Quantidade",
+                margin=dict(t=40),
+            )
+            st.plotly_chart(fig, width="stretch")
+        else:
+            st.info("Coluna de sexo não encontrada no dataset.")
+
+    # Faixa etária (pirâmide etária ou barras)
+    with col_p2:
+        st.subheader("Distribuição por faixa etária")
+
+        if "faixa_etaria" in df_filtrado.columns:
+            # Pirâmide etária (feminino/masculino)
+            if "sexo" in df_filtrado.columns:
+                df_pira = df_filtrado.copy()
+                df_pira["sexo"] = df_pira["sexo"].fillna("Ignorado").astype(str)
+                df_pira["faixa_etaria"] = df_pira["faixa_etaria"].astype(str)
+
+                categorias = [
+                    "< 1 ano",
+                    "01 a 08 anos",
+                    "09 a 17 anos",
+                    "18 a 26 anos",
+                    "27 a 35 anos",
+                    "36 a 44 anos",
+                    "45 a 53 anos",
+                    "54 a 62 anos",
+                    "63 a 71 anos",
+                    "72 a 80 anos",
+                    "81 a 89 anos",
+                    "90 anos ou mais",
+                ]
+                df_pira["faixa_etaria"] = pd.Categorical(
+                    df_pira["faixa_etaria"],
+                    categories=categorias,
+                    ordered=True,
+                )
+                df_pira = df_pira[df_pira["faixa_etaria"].isin(categorias)]
+
+                tabela = (
+                    df_pira.groupby(["faixa_etaria", "sexo"], observed=True)
+                    .size()
+                    .reset_index(name="n")
+                )
+                pivot = tabela.pivot(index="faixa_etaria", columns="sexo", values="n").fillna(0)
+
+                for s in pivot.columns:
+                    if "M" in s.upper():  # supondo masculino
+                        pivot[s] = -pivot[s]
+
+                fig = go.Figure()
+
+                for s in pivot.columns:
+                    fig.add_trace(
+                        go.Bar(
+                            y=pivot.index.astype(str),
+                            x=pivot[s],
+                            name=s,
+                            orientation="h",
+                        )
+                    )
+
+                fig.update_layout(
+                    barmode="relative",
+                    xaxis_title="Número de pacientes",
+                    yaxis_title="Faixa etária",
+                    title="Pirâmide etária por sexo",
+                )
+                st.plotly_chart(fig, width="stretch")
+            else:
+                faixa_counts = (
+                    df_filtrado["faixa_etaria"]
+                    .astype(str)
+                    .value_counts()
+                    .reindex(
+                        [
+                            "< 1 ano",
+                            "01 a 08 anos",
+                            "09 a 17 anos",
+                            "18 a 26 anos",
+                            "27 a 35 anos",
+                            "36 a 44 anos",
+                            "45 a 53 anos",
+                            "54 a 62 anos",
+                            "63 a 71 anos",
+                            "72 a 80 anos",
+                            "81 a 89 anos",
+                            "90 anos ou mais",
+                        ]
+                    )
+                    .dropna()
+                    .reset_index()
+                )
+                faixa_counts.columns = ["faixa_etaria", "n"]
+                fig = px.bar(
+                    faixa_counts,
+                    x="faixa_etaria",
+                    y="n",
+                    text="n",
+                )
+                fig.update_traces(textposition="outside")
+                fig.update_layout(
+                    xaxis_title="Faixa etária",
+                    yaxis_title="Quantidade",
+                    margin=dict(t=40),
+                )
+                st.plotly_chart(fig, width="stretch")
+        else:
+            st.info("Coluna de faixa etária não encontrada. Verifique se 'idade' está presente para cálculo.")
+
+    st.markdown("---")
+
+    # Distribuição por município de residência (treemap ou barra)
+    st.subheader("📍 Distribuição por município de residência")
+
+    if mun_col_atual:
+        df_mun = df_filtrado.copy()
+        df_mun[mun_col_atual] = df_mun[mun_col_atual].fillna("Ignorado").astype(str)
+
+        # Somente top N municípios
+        top_n = st.slider("Quantidade de municípios a exibir (por frequência)", 5, 50, 20)
+        mun_counts = (
+            df_mun[mun_col_atual]
+            .value_counts()
+            .head(top_n)
+            .reset_index()
         )
+        mun_counts.columns = ["municipio_residencia", "n"]
+
+        tipo_mapa = st.radio(
+            "Tipo de visualização",
+            ["Treemap", "Barras"],
+            horizontal=True,
+        )
+
+        if tipo_mapa == "Treemap":
+            fig = px.treemap(
+                mun_counts,
+                path=["municipio_residencia"],
+                values="n",
+            )
+            fig.update_layout(margin=dict(t=40, l=0, r=0, b=0))
+            st.plotly_chart(fig, width="stretch")
+        else:
+            fig = px.bar(
+                mun_counts,
+                x="municipio_residencia",
+                y="n",
+                text="n",
+            )
+            fig.update_traces(textposition="outside")
+            fig.update_layout(
+                xaxis_title="Município de residência",
+                yaxis_title="Quantidade",
+                margin=dict(t=40),
+            )
+            st.plotly_chart(fig, width="stretch")
+    else:
+        st.info("Coluna de município de residência não encontrada no dataset.")
+
+# ========================================
+# ABA 3 — INTERNAÇÕES E EVOLUÇÃO
+# ========================================
+with aba[2]:
+    st.header("🏥 Internações e Evolução")
+
+    col_i1, col_i2 = st.columns(2)
+
+    # Distribuição de dias de permanência
+    with col_i1:
+        st.subheader("Dias de permanência hospitalar")
+
+        if "dias_permanencia" in df_filtrado.columns:
+            df_dp = df_filtrado.copy()
+            df_dp = df_dp[df_dp["dias_permanencia"].notna()]
+
+            if not df_dp.empty:
+                fig = px.histogram(
+                    df_dp,
+                    x="dias_permanencia",
+                    nbins=30,
+                )
+                fig.update_layout(
+                    xaxis_title="Dias de permanência",
+                    yaxis_title="Quantidade de internações",
+                )
+                st.plotly_chart(fig, width="stretch")
+
+                st.write(
+                    f"Mediana de dias de permanência: **{df_dp['dias_permanencia'].median():.1f}**"
+                )
+            else:
+                st.info("Não há valores válidos de dias de permanência após filtros.")
+        else:
+            st.info(
+                "Dias de permanência não calculados. Verifique se as colunas 'data_internacao' e 'data_alta' estão presentes."
+            )
+
+    # Características do desfecho (mortalidade) ao longo do tempo
+    with col_i2:
+        st.subheader("Mortalidade hospitalar ao longo dos anos")
+
+        if (
+            "morte_hospitalar" in df_filtrado.columns
+            and (year_col or "data_internacao" in df_filtrado.columns)
+        ):
+            df_mort = df_filtrado.copy()
+
+            ano_col_mort = year_col
+            if ano_col_mort is None and "data_internacao" in df_mort.columns:
+                df_mort["ano_mort"] = df_mort["data_internacao"].dt.year
+                ano_col_mort = "ano_mort"
+
+            df_mort = df_mort[df_mort[ano_col_mort].notna()]
+            df_mort[ano_col_mort] = df_mort[ano_col_mort].astype(int)
+
+            if not df_mort.empty:
+                df_mort["eh_obito"] = (df_mort["morte_hospitalar"].fillna(0) == 1).astype(int)
+                serie = df_mort.groupby(ano_col_mort)["eh_obito"].mean() * 100
+
+                fig = px.line(
+                    serie.reset_index(),
+                    x=ano_col_mort,
+                    y="eh_obito",
+                    markers=True,
+                )
+                fig.update_layout(
+                    xaxis_title="Ano",
+                    yaxis_title="Taxa de mortalidade (%)",
+                )
+                st.plotly_chart(fig, width="stretch")
+            else:
+                st.info("Não há dados suficientes para calcular a mortalidade anual após filtros.")
+        else:
+            st.info(
+                "Não há coluna de mortalidade hospitalar ou informação de ano para a evolução temporal."
+            )
+
+    st.markdown("---")
+
+    # Caráter de atendimento x ano (heatmap/barras)
+    st.subheader("Internações por ano e caráter de atendimento")
+
+    if carater_col and (year_col or "data_internacao" in df_filtrado.columns):
+        df_car = df_filtrado.copy()
+        carater_plot_col = carater_col
+        ano_col_car = year_col
+
+        if ano_col_car is None and "data_internacao" in df_car.columns:
+            df_car["ano"] = df_car["data_internacao"].dt.year
+            ano_col_car = "ano"
+
+        df_car = df_car[df_car[ano_col_car].notna()]
+        df_car[ano_col_car] = df_car[ano_col_car].astype(int)
+
+        if not df_car.empty:
+            tab = (
+                df_car.groupby([ano_col_car, carater_plot_col])
+                .size()
+                .reset_index(name="n")
+            )
+
+            tipo_car_plot = st.radio(
+                "Tipo de visualização",
+                ["Heatmap", "Barras empilhadas"],
+                horizontal=True,
+            )
+
+            if tipo_car_plot == "Heatmap":
+                fig = px.density_heatmap(
+                    tab,
+                    x=ano_col_car,
+                    y=carater_plot_col,
+                    z="n",
+                    histfunc="avg",
+                )
+                fig.update_layout(
+                    xaxis_title="Ano",
+                    yaxis_title="Caráter de atendimento",
+                )
+                st.plotly_chart(fig, width="stretch")
+            else:
+                fig = px.bar(
+                    tab,
+                    x=ano_col_car,
+                    y="n",
+                    color=carater_plot_col,
+                )
+                fig.update_layout(
+                    xaxis_title="Ano",
+                    yaxis_title="Quantidade de internações",
+                )
+                st.plotly_chart(fig, width="stretch")
+        else:
+            st.info(
+                "Não há dados suficientes após filtros para montar a tabela de ano x caráter de atendimento."
+            )
     else:
         st.info(
-            "Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis. "
-            "Carregue a tabela de Regiões de Saúde no painel para habilitar."
+            "Não há coluna de caráter de atendimento ou de ano/datas para cruzar informações."
         )
 
-    st.subheader("Raça/Cor × Sexo")
-    if {"etnia", "sexo"}.issubset(base.columns):
-        df_etnia = base.value_counts(["etnia", "sexo"]).rename("cont").reset_index()
-        fig = px.bar(
-            df_etnia,
-            x="etnia",
-            y="cont",
-            color="sexo",
-            barmode="group",
-            text_auto=True,
-        )
-        fig.update_layout(
-            xaxis_title="Raça/Cor",
-            yaxis_title="Pacientes/Internações",
-            height=320,
-            margin=dict(t=40, b=80),
-        )
-       st.plotly_chart(fig, width="stretch")
-    else:
-        st.info("Requer colunas 'etnia' e 'sexo'.")
+# ========================================
+# ABA 4 — CARACTERÍSTICAS CLÍNICAS / CID
+# ========================================
+with aba[3]:
+    st.header("🧩 Características Clínicas / CID")
 
-# ============================
-# COLUNA DIREITA
-# ============================
-with col_dir:
-    st.subheader("Quantidade de pacientes")
-    if pd.notna(pacientes):
-        st.markdown(
-            f"<h2 style='text-align:center;'>{int(pacientes):,}</h2>".replace(",", "."),
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown("<h2 style='text-align:center;'>—</h2>", unsafe_allow_html=True)
-    st.caption("Pacientes distintos no período filtrado")
+    # Aqui consideramos que há uma coluna de CID principal e possivelmente
+    # uma tabela externa de CID -> descrição (pode ser mergeado no futuro)
 
-    st.markdown("---")
-
-    st.subheader("Procedimentos (amostra)")
-    proc_cols = [
-        c
-        for c in base.columns
-        if "proc_nome_prim" in c.lower() or c.lower() == "procedimento"
+    # Tenta encontrar colunas de CID
+    possiveis_cid = [
+        "cid_principal",
+        "cid",
+        "diagnostico_principal",
+        "cid10",
+        "cid_10",
     ]
-    if proc_cols:
-        pcol = proc_cols[0]
-        top_proc = (
-            base[pcol].dropna().astype(str).value_counts().head(10).reset_index()
+    cid_col = None
+    for c in possiveis_cid:
+        if c in df_filtrado.columns:
+            cid_col = c
+            break
+
+    if cid_col is None:
+        st.info(
+            "Não encontrei automaticamente uma coluna de CID principal. "
+            "Verifique se seu dataset contém algo como 'cid_principal' ou 'cid10'."
         )
-        top_proc.columns = ["Procedimento", "Pacientes/Internações"]
-        fig = px.bar(top_proc, x="Procedimento", y="Pacientes/Internações", text_auto=True)
+    else:
+        st.subheader("Distribuição dos principais CIDs")
+
+        df_cid = df_filtrado.copy()
+        df_cid[cid_col] = df_cid[cid_col].fillna("Ignorado").astype(str)
+
+        # top N CIDs
+        top_n_cid = st.slider("Quantidade de CIDs principais a exibir", 5, 50, 15)
+        cid_counts = (
+            df_cid[cid_col]
+            .value_counts()
+            .head(top_n_cid)
+            .reset_index()
+        )
+        cid_counts.columns = ["cid_principal", "n"]
+
+        fig = px.bar(
+            cid_counts,
+            x="cid_principal",
+            y="n",
+            text="n",
+        )
+        fig.update_traces(textposition="outside")
         fig.update_layout(
-            xaxis_tickangle=-35,
-            height=260,
-            margin=dict(t=40, b=120),
+            xaxis_title="CID principal",
+            yaxis_title="Quantidade de internações",
+            margin=dict(t=40),
         )
         st.plotly_chart(fig, width="stretch")
-    else:
-        st.info("Não encontrei coluna de procedimento agregada.")
+
+        st.markdown("---")
+
+        # Se existir informação de reinternação e mortalidade, podemos ver top CIDs
+        col_c1, col_c2 = st.columns(2)
+
+        with col_c1:
+            st.subheader("Top CIDs entre reinternações (30 dias)")
+
+            if "reinternado_30dias" in df_filtrado.columns:
+                df_reint = df_cid[df_cid["reinternado_30dias"] == 1]
+                if not df_reint.empty:
+                    cid_reint = (
+                        df_reint[cid_col]
+                        .value_counts()
+                        .head(top_n_cid)
+                        .reset_index()
+                    )
+                    cid_reint.columns = ["cid_principal", "n"]
+
+                    fig = px.bar(
+                        cid_reint,
+                        x="cid_principal",
+                        y="n",
+                        text="n",
+                    )
+                    fig.update_traces(textposition="outside")
+                    fig.update_layout(
+                        xaxis_title="CID principal",
+                        yaxis_title="Reinternações em 30 dias",
+                        margin=dict(t=40),
+                    )
+                    st.plotly_chart(fig, width="stretch")
+                else:
+                    st.info("Não há registros com reinternação em 30 dias após os filtros aplicados.")
+            else:
+                st.info("Coluna 'reinternado_30dias' não encontrada no dataset.")
+
+        with col_c2:
+            st.subheader("Top CIDs entre óbitos hospitalares")
+
+            if "morte_hospitalar" in df_filtrado.columns:
+                df_obito = df_cid[df_cid["morte_hospitalar"] == 1]
+                if not df_obito.empty:
+                    cid_morte = (
+                        df_obito[cid_col]
+                        .value_counts()
+                        .head(top_n_cid)
+                        .reset_index()
+                    )
+                    cid_morte.columns = ["cid_principal", "n"]
+
+                    fig = px.bar(
+                        cid_morte,
+                        x="cid_principal",
+                        y="n",
+                        text="n",
+                    )
+                    fig.update_traces(textposition="outside")
+                    fig.update_layout(
+                        xaxis_title="CID principal",
+                        yaxis_title="Óbitos hospitalares",
+                        margin=dict(t=40),
+                    )
+                    st.plotly_chart(fig, width="stretch")
+                else:
+                    st.info("Não há registros de óbito hospitalar após os filtros aplicados.")
+            else:
+                st.info("Coluna 'morte_hospitalar' não encontrada no dataset.")
+
+        st.markdown("---")
+
+        # Caso haja coluna de descrição de CID, podemos mostrar tabela
+        possiveis_desc = [
+            "descricao_cid",
+            "descricao",
+            "cid_descricao",
+            "cid_desc",
+        ]
+        desc_col = None
+        for c in possiveis_desc:
+            if c in df_filtrado.columns:
+                desc_col = c
+                break
+
+        if desc_col:
+            st.subheader("Tabela de CIDs com descrição (amostra)")
+
+            tabela_cid = (
+                df_filtrado[[cid_col, desc_col]]
+                .drop_duplicates()
+                .rename(columns={cid_col: "CID", desc_col: "Descrição"})
+                .head(200)
+            )
+            st.dataframe(tabela_cid)
+        else:
+            st.info("Não encontrei informações de CID com descrição textual no dataset.")
 
     st.markdown("---")
 
-    st.subheader("CID (capítulo / grupo) – amostra")
+    st.subheader("📉 Análise adicional por CID e idade (opcional)")
 
-    if "cid_grupo" in df_f.columns:
-        top_cid_grp = (
-            df_f["cid_grupo"].dropna().astype(str).value_counts().head(10).reset_index()
+    if cid_col and "idade" in df_filtrado.columns:
+        df_cid_idade = df_filtrado.copy()
+        df_cid_idade = df_cid_idade[df_cid_idade["idade"].notna()]
+
+        top_n_scatter = st.slider(
+            "Quantidade de CIDs para análise de idade",
+            3,
+            20,
+            10,
         )
-        top_cid_grp.columns = ["Grupo CID-10 (amostra)", "Frequência"]
-        fig = px.bar(
-            top_cid_grp,
-            x="Grupo CID-10 (amostra)",
-            y="Frequência",
-            text_auto=True,
+        principais_cids = (
+            df_cid_idade[cid_col]
+            .value_counts()
+            .head(top_n_scatter)
+            .index.tolist()
+        )
+        df_cid_idade = df_cid_idade[df_cid_idade[cid_col].isin(principais_cids)]
+
+        fig = px.box(
+            df_cid_idade,
+            x=cid_col,
+            y="idade",
         )
         fig.update_layout(
-            xaxis_tickangle=-35,
-            height=260,
-            margin=dict(t=40, b=120),
+            xaxis_title="CID principal",
+            yaxis_title="Idade",
         )
         st.plotly_chart(fig, width="stretch")
     else:
-        cid_col = [
-            c
-            for c in df_f.columns
-            if ("cid" in c.lower() or "descricao" in c.lower())
-        ]
-        if cid_col:
-            col_cid = cid_col[0]
-            top = (
-                df_f[col_cid]
-                .dropna()
-                .astype(str)
-                .str.upper()
-                .str[:50]
-                .value_counts()
-                .head(10)
-                .reset_index()
-            )
-            top.columns = ["CID/Descrição (amostra)", "Frequência"]
-            fig = px.bar(
-                top,
-                x="CID/Descrição (amostra)",
-                y="Frequência",
-                text_auto=True,
-            )
-            fig.update_layout(
-                xaxis_tickangle=-35,
-                height=260,
-                margin=dict(t=40, b=120),
-            )
-            st.plotly_chart(fig, width="stretch")
-        else:
-            st.info("Não encontrei informações de CID no dataset.")
+        st.info(
+            "Para a análise adicional, são necessárias as colunas de CID principal e de idade."
+        )
+
+# Fim do app
