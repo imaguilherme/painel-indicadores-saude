@@ -772,6 +772,7 @@ with col_esq:
             "carater",
             "caráter_atendimento",
             "carater_atend",
+            "natureza_agend",
         ]:
             if cand in df_f.columns:
                 carater_col = cand
