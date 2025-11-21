@@ -709,7 +709,7 @@ if ano_col:
             height=280,
             margin=dict(t=40, b=40),
         )
-        st.plotly_chart(fig_ano, use_container_width=True)
+       st.plotly_chart(fig_ano, width="stretch")
     else:
         st.info("Sem dados para o comparativo anual com os filtros atuais.")
 else:
@@ -736,7 +736,7 @@ with col_esq:
             df_sexo = base.value_counts("sexo").rename("cont").reset_index()
             fig = px.bar(df_sexo, x="sexo", y="cont", text_auto=True)
             fig.update_layout(height=230, margin=dict(t=40, b=30))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.info("Coluna 'sexo' não encontrada.")
 
@@ -772,7 +772,7 @@ with col_esq:
                 xaxis_title="",
                 margin=dict(t=40, b=80),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.info("Coluna de 'caráter do atendimento' não encontrada.")
 
@@ -842,7 +842,7 @@ with col_esq:
             margin=dict(l=80, r=80, t=50, b=50),
             showlegend=True,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
 
@@ -862,7 +862,7 @@ with col_meio:
             values="Pacientes/Internações",
         )
         fig.update_layout(height=550, margin=dict(t=40, l=0, r=0, b=0))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.caption(
             "Hierarquia: Estado → Região de Saúde → Município. Use os filtros para refinar."
         )
@@ -889,7 +889,7 @@ with col_meio:
             height=320,
             margin=dict(t=40, b=80),
         )
-        st.plotly_chart(fig, use_container_width=True)
+       st.plotly_chart(fig, width="stretch")
     else:
         st.info("Requer colunas 'etnia' e 'sexo'.")
 
@@ -927,7 +927,7 @@ with col_dir:
             height=260,
             margin=dict(t=40, b=120),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.info("Não encontrei coluna de procedimento agregada.")
 
@@ -951,7 +951,7 @@ with col_dir:
             height=260,
             margin=dict(t=40, b=120),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         cid_col = [
             c
@@ -982,6 +982,6 @@ with col_dir:
                 height=260,
                 margin=dict(t=40, b=120),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.info("Não encontrei informações de CID no dataset.")
