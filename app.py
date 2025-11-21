@@ -767,17 +767,17 @@ with col_esq:
 
     with c2:
         carater_col = None
-        for cand in [
-            "carater_atendimento",
-            "caracter_atendimento",
-            "carater",
-            "caráter_atendimento",
-            "carater_atend",
-            "natureza_agend",
-        ]:
-            if cand in df_f.columns:
-                carater_col = cand
-                break
+            for cand in [
+                "carater_atendimento",
+                "caracter_atendimento",
+                "carater",
+                "caráter_atendimento",
+                "carater_atend",
+                "natureza_agend",
+    ]:
+        if cand in df_f.columns:
+            carater_col = cand
+            break
 
         st.subheader("Caráter do atendimento")
         if carater_col:
