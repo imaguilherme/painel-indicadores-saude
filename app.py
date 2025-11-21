@@ -734,44 +734,32 @@ with col_esq:
 
 # ========= COLUNA DO MEIO =========
 with col_meio:
-    st.subheader("Estado / Região de residência do paciente")
+    st.subheader("Estado / Região de Saúde / Município de residência")
 
-    if "cidade_moradia" in base.columns:
+    # Verifica se todas as colunas necessárias existem
+    if all(col in base.columns for col in ["uf", "regiao_saude", "cidade_moradia"]):
+
+        # Prepara base para o treemap
         df_geo_plot = base.dropna(subset=["cidade_moradia"]).copy()
         df_geo_plot["Pacientes/Internações"] = 1
 
-        estado_col = next(
-            (c for c in df_geo_plot.columns if c.lower() in
-             ["estado_residencia","uf_residencia","uf","estado","sigla_uf"]),
-            None
-        )
-        regiao_col = next(
-            (c for c in df_geo_plot.columns
-             if "regiao" in c.lower() and "saude" in c.lower()),
-            None
-        )
-
-        path_cols = []
-        if estado_col: path_cols.append(estado_col)
-        if regiao_col: path_cols.append(regiao_col)
-        path_cols.append("cidade_moradia")
-
+        # Treemap com 3 níveis: UF → Região de Saúde → Município
         fig = px.treemap(
             df_geo_plot,
-            path=path_cols,
-            values="Pacientes/Internações"
+            path=["uf", "regiao_saude", "cidade_moradia"],
+            values="Pacientes/Internações",
         )
+
         fig.update_layout(
-            height=500,
+            height=550,
             margin=dict(t=40, l=0, r=0, b=0)
         )
+
         st.plotly_chart(fig, use_container_width=True)
-        st.caption(
-            "Use os filtros de Estado / Região de saúde / Município "
-            "para refinar a distribuição."
-        )
+        st.caption("Use os filtros de Estado / Região de Saúde / Município para refinar a distribuição.")
+
     else:
-        st.info("Coluna 'cidade_moradia' não encontrada.")
+        st.warning("Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não encontradas. Verifique o enriquecimento geográfico.")
 
     # Raça × Sexo
     st.subheader("Raça/Cor × Sexo")
