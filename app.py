@@ -775,6 +775,7 @@ with col_esq:
 
     # PIRÂMIDE ETÁRIA (ESTILO RELATÓRIO)
     st.subheader("Pirâmide Etária")
+
     if {"faixa_etaria", "sexo"}.issubset(base.columns):
         categorias = [
             "90 anos ou mais",
@@ -792,41 +793,48 @@ with col_esq:
         ]
 
         df_pira = base.copy()
+        df_pira["sexo"] = df_pira["sexo"].astype(str).str.strip().str.title()
         df_pira = df_pira[df_pira["faixa_etaria"].isin(categorias)]
 
+        # Agrupamento dinâmico por sexo
         tabela = (
             df_pira.groupby(["faixa_etaria", "sexo"])
             .size()
             .reset_index(name="n")
         )
+
         pivot = tabela.pivot(index="faixa_etaria", columns="sexo", values="n").fillna(0)
         pivot = pivot.reindex(categorias)
 
-        male = pivot.get("Masculino", pd.Series([0] * len(pivot)))
-        female = -pivot.get("Feminino", pd.Series([0] * len(pivot)))
-
+        # Cada categoria vira uma barra
         fig = go.Figure()
-        cor_fem = "#DA83A3"
-        cor_masc = "#91A8C5"
 
-        fig.add_bar(
-            y=pivot.index,
-            x=female,
-            name="Feminino",
-            orientation="h",
-            marker_color=cor_fem,
-            text=pivot["Feminino"].astype(int),
-            textposition="outside",
-        )
-        fig.add_bar(
-            y=pivot.index,
-            x=male,
-            name="Masculino",
-            orientation="h",
-            marker_color=cor_masc,
-            text=pivot["Masculino"].astype(int),
-            textposition="outside",
-        )
+        # Cores automáticas
+        palette = [
+            "#DA83A3", "#91A8C5", "#A3D977", "#E6C76A", "#C28CCB",
+            "#6CC5C6", "#E39A8D", "#8AA9B7"
+        ]
+        color_index = 0
+
+        for sexo_cat in pivot.columns:
+            values = pivot[sexo_cat]
+
+            # Define negativo para esquerda (primeiro sexo), positivo para os demais
+            if color_index == 0:
+                x_vals = -values
+            else:
+                x_vals = values
+
+            fig.add_bar(
+                y=pivot.index,
+                x=x_vals,
+                name=str(sexo_cat),
+                orientation="h",
+                marker_color=palette[color_index % len(palette)],
+                text=values.astype(int),
+                textposition="outside",
+            )
+            color_index += 1
 
         fig.update_layout(
             barmode="overlay",
@@ -839,9 +847,12 @@ with col_esq:
             margin=dict(l=80, r=80, t=50, b=50),
             showlegend=True,
         )
-        st.plotly_chart(fig, width="stretch")
+
+        st.plotly_chart(fig, use_container_width=True)
+
     else:
         st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
+
 
 # ============================
 # COLUNA DO MEIO
