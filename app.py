@@ -109,7 +109,6 @@ def load_parquet(file):
     return _post_load(pd.read_parquet(file))
 
 
-
 @st.cache_resource(show_spinner=False)
 def load_duckdb(csv_paths):
     """
@@ -187,8 +186,6 @@ def load_duckdb(csv_paths):
     )
 
     return con
-
-
 
 
 def df_from_duckdb(con, sql: str) -> pd.DataFrame:
@@ -709,7 +706,7 @@ if ano_col:
             height=280,
             margin=dict(t=40, b=40),
         )
-       st.plotly_chart(fig_ano, width="stretch")
+        st.plotly_chart(fig_ano, width="stretch")
     else:
         st.info("Sem dados para o comparativo anual com os filtros atuais.")
 else:
@@ -889,7 +886,7 @@ with col_meio:
             height=320,
             margin=dict(t=40, b=80),
         )
-       st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch")
     else:
         st.info("Requer colunas 'etnia' e 'sexo'.")
 
