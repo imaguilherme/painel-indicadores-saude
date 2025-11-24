@@ -39,9 +39,13 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
         "data_nasc",
         "dt_nasc",
     ]
-    for c in date_cols:
+        for c in date_cols:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
+
+    # ----------------- ano da internação (derivado) -----------------
+    if "data_internacao" in df.columns and "ano_internacao" not in df.columns and "ano" not in df.columns:
+        df["ano_internacao"] = df["data_internacao"].dt.year
 
     # ----------------- numéricos básicos -----------------
     for c in ["idade", "ano", "ano_internacao"]:
