@@ -373,6 +373,148 @@ def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def marcar_obito_periodo(df: pd.DataFrame) -> pd.DataFrame:
+    if {"data_internacao", "data_alta"}.issubset(df.columns):
+        e = df.copy()
+        if "data_obito" in e.columns:
+            e["obito_no_periodo"] = (
+                (e["data_obito"].notna())
+                & (e["data_obito"] >= e["data_internacao"])
+                & (e["data_obito"] <= (e["data_alta"] - pd.Timedelta(days=1)))
+            )
+        elif "evolucao" in e.columns:
+            e["obito_no_periodo"] = e["evolucao"].astype(str).str.contains(
+                "ÓBITO", case=False, na=False
+            )
+        else:
+            e["obito_no_periodo"] = False
+
+        if "codigo_internacao" in e.columns:
+            aux = (
+                e[["codigo_internacao", "obito_no_periodo"]]
+                .groupby("codigo_internacao", as_index=False)["obito_no_periodo"]
+                .max()
+            )
+            df = df.merge(aux, on="codigo_internacao", how="left")
+        else:
+            df["obito_no_periodo"] = e["obito_no_periodo"]
+    else:
+        df["obito_no_periodo"] = False
+    return df
+
+
+def marcar_uti_flag(df: pd.DataFrame) -> pd.DataFrame:
+    if "codigo_internacao" not in df.columns:
+        df["uti_flag"] = False
+        return df
+
+    e = df.copy()
+    uti_flag = pd.Series(False, index=e.index)
+
+    if "dt_entrada_cti" in e.columns:
+        uti_flag = uti_flag | e["dt_entrada_cti"].notna()
+    if "dt_saida_cti" in e.columns:
+        uti_flag = uti_flag | e["dt_saida_cti"].notna()
+
+    for cand in ["uti", "internacao_uti", "teve_uti"]:
+        if cand in e.columns:
+            uti_flag = uti_flag | e[cand].astype(str).str.upper().isin(
+                ["1", "S", "SIM", "TRUE", "VERDADEIRO"]
+            )
+
+    e["uti_flag"] = uti_flag
+    aux = (
+        e[["codigo_internacao", "uti_flag"]]
+        .groupby("codigo_internacao", as_index=False)["uti_flag"]
+        .max()
+    )
+    df = df.merge(aux, on="codigo_internacao", how="left")
+    df["uti_flag"] = df["uti_flag"].fillna(False)
+    return df
+
+
+def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
+    ok = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}.issubset(
+        df.columns
+    )
+    df["reint_30d_proc"] = False
+    df["reint_30d_alta"] = False
+    if not ok:
+        return df
+
+    s = df.sort_values(["prontuario_anonimo", "data_internacao", "data_alta"]).copy()
+    s["next_dt_internacao"] = s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
+    s["delta_proc"] = (s["next_dt_internacao"] - s["data_internacao"]).dt.days
+    s["delta_pos_alta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
+    s["transfer"] = s["delta_pos_alta"] <= 1
+
+    s["reint_30d_proc"] = s["delta_proc"].between(0, 30, inclusive="both") & (~s["transfer"])
+    s["reint_30d_alta"] = s["delta_pos_alta"].between(0, 30, inclusive="both") & (~s["transfer"])
+
+    aux = (
+        s[["codigo_internacao", "reint_30d_proc", "reint_30d_alta"]]
+        .groupby("codigo_internacao", as_index=False)[["reint_30d_proc", "reint_30d_alta"]]
+        .max()
+    )
+    df = df.merge(aux, on="codigo_internacao", how="left")
+    df["reint_30d_proc"] = df["reint_30d_proc"].fillna(False)
+    df["reint_30d_alta"] = df["reint_30d_alta"].fillna(False)
+    return df
+
+
+def marcar_mort_30d_proc(df: pd.DataFrame) -> pd.DataFrame:
+    if "data_obito" not in df.columns or "codigo_internacao" not in df.columns:
+        df["obito_30d_proc"] = False
+        return df
+
+    e = df.copy()
+    cand_datas = [
+        "data_procedimento",
+        "data_cirurgia",
+        "data_cirurgia_min",
+        "data_cirurgia_max",
+        "data_internacao",
+    ]
+    data_proc_col = next((c for c in cand_datas if c in e.columns), None)
+    if not data_proc_col:
+        df["obito_30d_proc"] = False
+        return df
+
+    e = (
+        e.sort_values(data_proc_col)
+        .groupby("codigo_internacao", as_index=False)
+        .first()
+    )
+
+    e["delta"] = (e["data_obito"] - e[data_proc_col]).dt.days
+    e["obito_30d_proc"] = e["delta"].between(0, 30, inclusive="both")
+
+    aux = e[["codigo_internacao", "obito_30d_proc"]]
+    df = df.merge(aux, on="codigo_internacao", how="left")
+    df["obito_30d_proc"] = df["obito_30d_proc"].fillna(False)
+    return df
+
+
+def marcar_mort_30d_alta(df: pd.DataFrame) -> pd.DataFrame:
+    if not {"data_alta", "data_obito", "codigo_internacao"}.issubset(df.columns):
+        df["obito_30d_alta"] = False
+        return df
+
+    e = (
+        df.sort_values("data_alta")
+        .groupby("codigo_internacao", as_index=False)
+        .tail(1)
+    )
+
+    e["delta"] = (e["data_obito"] - e["data_alta"]).dt.days
+    e["obito_30d_alta"] = e["delta"].between(0, 30, inclusive="both")
+
+    aux = e[["codigo_internacao", "obito_30d_alta"]]
+    df = df.merge(aux, on="codigo_internacao", how="left")
+    df["obito_30d_alta"] = df["obito_30d_alta"].fillna(False)
+    return df
+
+
 def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
     pacientes = (
         df_pacientes["prontuario_anonimo"].nunique()
@@ -561,6 +703,77 @@ def mortalidade_30d_pos_alta(df: pd.DataFrame):
 
 
 # --------------------------------------------------------------------
+# FUNÇÕES AUXILIARES PARA O INDICADOR SELECIONADO
+# --------------------------------------------------------------------
+
+
+def definir_base_para_indicador(indicador, df_f, df_pac):
+    """
+    Define qual base será usada nos gráficos,
+    dependendo do indicador.
+    """
+    if indicador == "Quantidade de pacientes":
+        return df_pac.copy()
+    # Para todos os outros, trabalhamos em nível de internação/evento
+    return df_f.copy()
+
+
+def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFrame:
+    """
+    Cria a coluna 'peso' que será somada nos gráficos.
+    A ideia é sempre usar CONTAGEM (soma de eventos) e não média.
+    """
+    df = df.copy()
+    df["peso"] = 0.0
+
+    if indicador in ["Quantidade de pacientes", "Quantidade de internações"]:
+        df["peso"] = 1.0
+
+    elif indicador == "Quantidade de procedimentos":
+        df["peso"] = df.get("n_proced", 0).fillna(0)
+
+    elif indicador == "Tempo médio de internação (dias)":
+        # soma dos dias de permanência; o gráfico mostra total de dias por categoria
+        if "dias_permanencia" in df.columns:
+            df["peso"] = df["dias_permanencia"].clip(lower=0).fillna(0)
+        else:
+            df["peso"] = 0.0
+
+    elif indicador == "Internação em UTI (%)":
+        df = marcar_uti_flag(df)
+        df["peso"] = df["uti_flag"].astype(int)
+
+    elif indicador == "Tempo médio de internação em UTI (dias)":
+        if {"dt_entrada_cti", "dt_saida_cti"}.issubset(df.columns):
+            dias_uti = (df["dt_saida_cti"] - df["dt_entrada_cti"]).dt.days
+            df["peso"] = dias_uti.clip(lower=0).fillna(0)
+        else:
+            df["peso"] = 0.0
+
+    elif indicador == "Reinternação em até 30 dias do procedimento (%)":
+        df = marcar_reinternacoes(df)
+        df["peso"] = df["reint_30d_proc"].astype(int)
+
+    elif indicador == "Reinternação em até 30 dias da alta (%)":
+        df = marcar_reinternacoes(df)
+        df["peso"] = df["reint_30d_alta"].astype(int)
+
+    elif indicador == "Mortalidade hospitalar (%)":
+        df = marcar_obito_periodo(df)
+        df["peso"] = df["obito_no_periodo"].astype(int)
+
+    elif indicador == "Mortalidade em até 30 dias do procedimento (%)":
+        df = marcar_mort_30d_proc(df)
+        df["peso"] = df["obito_30d_proc"].astype(int)
+
+    elif indicador == "Mortalidade em até 30 dias da alta (%)":
+        df = marcar_mort_30d_alta(df)
+        df["peso"] = df["obito_30d_alta"].astype(int)
+
+    return df
+
+
+# --------------------------------------------------------------------
 # FILTROS
 # --------------------------------------------------------------------
 
@@ -728,13 +941,12 @@ show_active_filters(f)
 st.divider()
 
 modo_perfil = st.toggle(
-    "Contar por **paciente único** (perfil). Desative para **internações**.",
+    "Contar por **paciente único** (perfil) nos gráficos quando o indicador for 'Quantidade de pacientes'.",
     value=True,
 )
-base = df_pac if modo_perfil else df_f
 
 # --------------------------------------------------------------------
-# KPIs GLOBAIS (BASE PARA OS BOTÕES)
+# KPIs GLOBAIS
 # --------------------------------------------------------------------
 
 pacientes, internacoes, tmi, mort_hosp = kpis(df_f, df_pac)
@@ -772,10 +984,10 @@ k6.metric(
 )
 
 # --------------------------------------------------------------------
-# INDICADOR SELECIONADO (ESTILO iCardio)
+# INDICADOR SELECIONADO
 # --------------------------------------------------------------------
 
-indicadores_icardio = [
+indicadores = [
     "Quantidade de pacientes",
     "Quantidade de internações",
     "Quantidade de procedimentos",
@@ -789,11 +1001,11 @@ indicadores_icardio = [
     "Mortalidade em até 30 dias da alta (%)",
 ]
 
-st.markdown("### Indicadores disponíveis (botões iCardio)")
+st.markdown("### Indicadores disponíveis")
 
 indicador_selecionado = st.radio(
     "Selecione o indicador para detalhar e para o comparativo anual:",
-    indicadores_icardio,
+    indicadores,
     horizontal=True,
 )
 
@@ -838,7 +1050,7 @@ def calcular_indicador(nome):
 def calcular_indicador_ano(nome, df_eventos_ano: pd.DataFrame, df_pacientes_ano: pd.DataFrame):
     """
     Calcula o mesmo indicador, mas apenas para um subconjunto (ex.: por ano),
-    para montar o comparativo anual em estilo iCardio.
+    para montar o comparativo anual.
     """
     pac_ano, int_ano, tmi_ano, mort_hosp_ano = kpis(df_eventos_ano, df_pacientes_ano)
     ri_proc_ano = reinternacao_30d_pos_proced(df_eventos_ano)
@@ -880,7 +1092,6 @@ valor_ind = calcular_indicador(indicador_selecionado)
 if "%" in indicador_selecionado:
     texto_valor = f"{valor_ind:.2f}%" if pd.notna(valor_ind) else "—"
 else:
-    # usa separador de milhar com ponto para ficar no padrão brasileiro
     texto_valor = (
         f"{valor_ind:,.2f}".replace(",", ".") if pd.notna(valor_ind) else "—"
     )
@@ -916,15 +1127,9 @@ if ano_col:
 
         if not df_plot.empty:
             fig_ano = px.bar(df_plot, x=ano_col, y="valor", text_auto=True)
-
-            if "%" in indicador_selecionado:
-                y_label = indicador_selecionado
-            else:
-                y_label = indicador_selecionado
-
             fig_ano.update_layout(
                 xaxis_title="Ano",
-                yaxis_title=y_label,
+                yaxis_title=indicador_selecionado,
                 height=280,
                 margin=dict(t=40, b=40),
             )
@@ -937,6 +1142,17 @@ else:
     st.info("Coluna de ano não encontrada no dataset.")
 
 st.divider()
+
+# --------------------------------------------------------------------
+# BASE PARA OS GRÁFICOS (RESPONDE AO INDICADOR)
+# --------------------------------------------------------------------
+
+if indicador_selecionado == "Quantidade de pacientes" and modo_perfil:
+    base_charts = df_pac.copy()
+else:
+    base_charts = definir_base_para_indicador(indicador_selecionado, df_f, df_pac)
+
+base_charts = adicionar_peso_por_indicador(base_charts, indicador_selecionado)
 
 # --------------------------------------------------------------------
 # GRID PRINCIPAL (3 COLUNAS)
@@ -953,15 +1169,20 @@ with col_esq:
     # Sexo
     with c1:
         st.subheader("Sexo")
-        if "sexo" in base.columns:
-            df_sexo = base.value_counts("sexo").rename("cont").reset_index()
-            fig = px.bar(df_sexo, x="sexo", y="cont", text_auto=True)
+        if "sexo" in base_charts.columns:
+            df_sexo = (
+                base_charts.groupby("sexo", dropna=False)["peso"]
+                .sum()
+                .reset_index()
+                .rename(columns={"peso": "valor"})
+            )
+            fig = px.bar(df_sexo, x="sexo", y="valor", text_auto=True)
             fig.update_layout(height=230, margin=dict(t=40, b=30))
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Coluna 'sexo' não encontrada.")
 
-    # Caráter do atendimento (usa NATUREZA_AGEND da tabela de procedimentos)
+    # Caráter do atendimento
     with c2:
         st.subheader("Caráter do atendimento")
 
@@ -974,17 +1195,22 @@ with col_esq:
             "carater_atend",
             "natureza_agend",
         ]:
-            if cand in df_f.columns:
+            if cand in base_charts.columns:
                 carater_col = cand
                 break
 
         if carater_col:
-            ordem = df_f[carater_col].value_counts().index.tolist()
-            df_car = df_f.value_counts(carater_col).rename("cont").reset_index()
+            df_car = (
+                base_charts.groupby(carater_col, dropna=False)["peso"]
+                .sum()
+                .reset_index()
+                .rename(columns={"peso": "valor"})
+            )
+            ordem = df_car.sort_values("valor", ascending=False)[carater_col].tolist()
             fig = px.bar(
                 df_car,
                 x=carater_col,
-                y="cont",
+                y="valor",
                 text_auto=True,
                 category_orders={carater_col: ordem},
             )
@@ -993,14 +1219,14 @@ with col_esq:
                 xaxis_title="",
                 margin=dict(t=40, b=80),
             )
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Coluna de 'caráter do atendimento' não encontrada.")
 
-    # PIRÂMIDE ETÁRIA (ESTILO RELATÓRIO)
+    # PIRÂMIDE ETÁRIA
     st.subheader("Pirâmide Etária")
 
-    if {"faixa_etaria", "sexo"}.issubset(base.columns):
+    if {"faixa_etaria", "sexo"}.issubset(base_charts.columns):
         categorias = [
             "90 anos ou mais",
             "81 a 89 anos",
@@ -1016,24 +1242,20 @@ with col_esq:
             "< 1 ano",
         ]
 
-        df_pira = base.copy()
+        df_pira = base_charts.copy()
         df_pira["sexo"] = df_pira["sexo"].astype(str).str.strip().str.title()
         df_pira = df_pira[df_pira["faixa_etaria"].isin(categorias)]
 
-        # Agrupamento dinâmico por sexo
         tabela = (
-            df_pira.groupby(["faixa_etaria", "sexo"])
-            .size()
+            df_pira.groupby(["faixa_etaria", "sexo"], dropna=False)["peso"]
+            .sum()
             .reset_index(name="n")
         )
 
         pivot = tabela.pivot(index="faixa_etaria", columns="sexo", values="n").fillna(0)
         pivot = pivot.reindex(categorias)
 
-        # Cada categoria vira uma barra
         fig = go.Figure()
-
-        # Cores automáticas
         palette = [
             "#DA83A3", "#91A8C5", "#A3D977", "#E6C76A", "#C28CCB",
             "#6CC5C6", "#E39A8D", "#8AA9B7"
@@ -1042,8 +1264,6 @@ with col_esq:
 
         for sexo_cat in pivot.columns:
             values = pivot[sexo_cat]
-
-            # Define negativo para esquerda (primeiro sexo), positivo para os demais
             if color_index == 0:
                 x_vals = -values
             else:
@@ -1064,7 +1284,7 @@ with col_esq:
             barmode="overlay",
             height=550,
             xaxis=dict(
-                title="Pacientes",
+                title="Quantidade (conforme indicador)",
                 showgrid=False,
             ),
             yaxis=dict(title="Faixa etária", autorange="reversed"),
@@ -1084,17 +1304,17 @@ with col_esq:
 with col_meio:
     st.subheader("Estado → Região de Saúde → Município de residência")
 
-    if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base.columns):
-        df_geo_plot = base.dropna(subset=["cidade_moradia"]).copy()
-        df_geo_plot["Pacientes/Internações"] = 1
+    if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base_charts.columns):
+        df_geo_plot = base_charts.dropna(subset=["cidade_moradia"]).copy()
+        df_geo_plot["valor"] = df_geo_plot["peso"]
 
         fig = px.treemap(
             df_geo_plot,
             path=["uf", "regiao_saude", "cidade_moradia"],
-            values="Pacientes/Internações",
+            values="valor",
         )
         fig.update_layout(height=550, margin=dict(t=40, l=0, r=0, b=0))
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
         st.caption(
             "Hierarquia: Estado → Região de Saúde → Município. Use os filtros para refinar."
         )
@@ -1105,23 +1325,27 @@ with col_meio:
         )
 
     st.subheader("Raça/Cor × Sexo")
-    if {"etnia", "sexo"}.issubset(base.columns):
-        df_etnia = base.value_counts(["etnia", "sexo"]).rename("cont").reset_index()
+    if {"etnia", "sexo"}.issubset(base_charts.columns):
+        df_etnia = (
+            base_charts.groupby(["etnia", "sexo"], dropna=False)["peso"]
+            .sum()
+            .reset_index(name="valor")
+        )
         fig = px.bar(
             df_etnia,
             x="etnia",
-            y="cont",
+            y="valor",
             color="sexo",
             barmode="group",
             text_auto=True,
         )
         fig.update_layout(
             xaxis_title="Raça/Cor",
-            yaxis_title="Pacientes/Internações",
+            yaxis_title="Quantidade (conforme indicador)",
             height=320,
             margin=dict(t=40, b=80),
         )
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Requer colunas 'etnia' e 'sexo'.")
 
@@ -1144,22 +1368,26 @@ with col_dir:
     st.subheader("Procedimentos (amostra)")
     proc_cols = [
         c
-        for c in base.columns
+        for c in base_charts.columns
         if "proc_nome_prim" in c.lower() or c.lower() == "procedimento"
     ]
     if proc_cols:
         pcol = proc_cols[0]
         top_proc = (
-            base[pcol].dropna().astype(str).value_counts().head(10).reset_index()
+            base_charts.groupby(pcol, dropna=False)["peso"]
+            .sum()
+            .reset_index()
+            .rename(columns={"peso": "valor"})
         )
-        top_proc.columns = ["Procedimento", "Pacientes/Internações"]
-        fig = px.bar(top_proc, x="Procedimento", y="Pacientes/Internações", text_auto=True)
+        top_proc = top_proc.sort_values("valor", ascending=False).head(10)
+        top_proc.columns = ["Procedimento", "Quantidade (conforme indicador)"]
+        fig = px.bar(top_proc, x="Procedimento", y="Quantidade (conforme indicador)", text_auto=True)
         fig.update_layout(
             xaxis_tickangle=-35,
             height=260,
             margin=dict(t=40, b=120),
         )
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Não encontrei coluna de procedimento agregada.")
 
@@ -1167,15 +1395,19 @@ with col_dir:
 
     st.subheader("CID (capítulo / grupo) – amostra")
 
-    if "cid_grupo" in df_f.columns:
+    if "cid_grupo" in base_charts.columns:
         top_cid_grp = (
-            df_f["cid_grupo"].dropna().astype(str).value_counts().head(10).reset_index()
+            base_charts.groupby("cid_grupo", dropna=False)["peso"]
+            .sum()
+            .reset_index()
+            .rename(columns={"peso": "valor"})
         )
-        top_cid_grp.columns = ["Grupo CID-10 (amostra)", "Frequência"]
+        top_cid_grp = top_cid_grp.sort_values("valor", ascending=False).head(10)
+        top_cid_grp.columns = ["Grupo CID-10 (amostra)", "Quantidade (conforme indicador)"]
         fig = px.bar(
             top_cid_grp,
             x="Grupo CID-10 (amostra)",
-            y="Frequência",
+            y="Quantidade (conforme indicador)",
             text_auto=True,
         )
         fig.update_layout(
@@ -1183,30 +1415,28 @@ with col_dir:
             height=260,
             margin=dict(t=40, b=120),
         )
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
     else:
         cid_col = [
             c
-            for c in df_f.columns
+            for c in base_charts.columns
             if ("cid" in c.lower() or "descricao" in c.lower())
         ]
         if cid_col:
             col_cid = cid_col[0]
             top = (
-                df_f[col_cid]
-                .dropna()
-                .astype(str)
-                .str.upper()
-                .str[:50]
-                .value_counts()
-                .head(10)
+                base_charts.groupby(col_cid, dropna=False)["peso"]
+                .sum()
                 .reset_index()
+                .rename(columns={"peso": "valor"})
             )
-            top.columns = ["CID/Descrição (amostra)", "Frequência"]
+            top[col_cid] = top[col_cid].astype(str).str.upper().str[:50]
+            top = top.sort_values("valor", ascending=False).head(10)
+            top.columns = ["CID/Descrição (amostra)", "Quantidade (conforme indicador)"]
             fig = px.bar(
                 top,
                 x="CID/Descrição (amostra)",
-                y="Frequência",
+                y="Quantidade (conforme indicador)",
                 text_auto=True,
             )
             fig.update_layout(
@@ -1214,6 +1444,6 @@ with col_dir:
                 height=260,
                 margin=dict(t=40, b=120),
             )
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Não encontrei informações de CID no dataset.")
