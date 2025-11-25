@@ -1061,12 +1061,38 @@ indicadores = [
 ]
 
 st.markdown("### Indicadores disponíveis")
+st.write("Selecione o indicador para detalhar e para o comparativo anual:")
 
-indicador_selecionado = st.radio(
-    "Selecione o indicador para detalhar e para o comparativo anual:",
-    indicadores,
-    horizontal=True,
-)
+# estado inicial
+if "indicador_selecionado" not in st.session_state:
+    st.session_state["indicador_selecionado"] = indicadores[0]
+
+with st.container():
+    # wrapper para aplicar o CSS apenas aqui
+    st.markdown("<div class='indicadores-grid'>", unsafe_allow_html=True)
+
+    # quantos botões por linha
+    cols = st.columns(5)
+
+    for i, ind in enumerate(indicadores):
+        col = cols[i % len(cols)]
+
+        # se for o selecionado, mostra um botão "fake" só de visual (sem clique)
+        if ind == st.session_state["indicador_selecionado"]:
+            col.markdown(
+                f"<button class='selected-indicador'>{ind}</button>",
+                unsafe_allow_html=True,
+            )
+        else:
+            # os demais são botões clicáveis
+            if col.button(ind, key=f"btn_ind_{i}", use_container_width=True):
+                st.session_state["indicador_selecionado"] = ind
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# daqui pra baixo você usa normalmente:
+indicador_selecionado = st.session_state["indicador_selecionado"]
+
 
 
 def calcular_indicador(nome):
