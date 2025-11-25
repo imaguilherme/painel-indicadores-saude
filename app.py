@@ -752,23 +752,23 @@ def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFra
 
     elif indicador == "Reinternação em até 30 dias do procedimento (%)":
         df = marcar_reinternacoes(df)
-        df["peso"] = df["reint_30d_proc"].astype(int)
+        df["peso"] = df["reint_30d_proc"].fillna(False).astype(int)
 
     elif indicador == "Reinternação em até 30 dias da alta (%)":
         df = marcar_reinternacoes(df)
-        df["peso"] = df["reint_30d_alta"].astype(int)
+        df["peso"] = df["reint_30d_alta"].fillna(False).astype(int)
 
     elif indicador == "Mortalidade hospitalar (%)":
         df = marcar_obito_periodo(df)
-        df["peso"] = df["obito_no_periodo"].astype(int)
+        df["peso"] = df["obito_no_periodo"].fillna(False).astype(int)
 
     elif indicador == "Mortalidade em até 30 dias do procedimento (%)":
         df = marcar_mort_30d_proc(df)
-        df["peso"] = df["obito_30d_proc"].astype(int)
+        df["peso"] = df["obito_30d_proc"].fillna(False).astype(int)
 
     elif indicador == "Mortalidade em até 30 dias da alta (%)":
         df = marcar_mort_30d_alta(df)
-        df["peso"] = df["obito_30d_alta"].astype(int)
+        df["peso"] = df["obito_30d_alta"].fillna(False).astype(int)
 
     return df
 
@@ -1483,3 +1483,58 @@ with col_dir:
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Não encontrei informações de CID no dataset.")
+
+
+# ============================
+# VERSÃO ATUALIZADA DE marcar_reinternacoes
+# ============================
+def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
+    """Marca reinternações em até 30 dias a partir do procedimento e da alta.
+
+    - reint_30d_proc: se a próxima internação do mesmo prontuário inicia em até 30 dias da data de internação atual
+    - reint_30d_alta: se a próxima internação inicia em até 30 dias da data de alta atual
+    """
+    df = df.copy()
+    required = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}
+    # Garante as colunas, mesmo que vazias
+    if not required.issubset(df.columns):
+        df["reint_30d_proc"] = False
+        df["reint_30d_alta"] = False
+        return df
+
+    # Ordena por paciente e datas
+    s = df.sort_values(
+        ["prontuario_anonimo", "data_internacao", "data_alta"],
+        kind="mergesort"
+    ).copy()
+
+    # Próxima internação por paciente
+    s["next_dt_internacao"] = s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
+
+    # Diferenças em dias
+    s["delta_proc"] = (s["next_dt_internacao"] - s["data_internacao"]).dt.days
+    s["delta_pos_alta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
+
+    # Transferência (internação subsequente até 1 dia após a alta)
+    s["transfer"] = s["delta_pos_alta"] <= 1
+
+    # Flags de reinternação (ignorando transferências)
+    s["reint_30d_proc"] = s["delta_proc"].between(0, 30, inclusive="both") & (~s["transfer"])
+    s["reint_30d_alta"] = s["delta_pos_alta"].between(0, 30, inclusive="both") & (~s["transfer"])
+
+    # Consolida por internação
+    aux = (
+        s[["codigo_internacao", "reint_30d_proc", "reint_30d_alta"]]
+        .groupby("codigo_internacao", as_index=False)[["reint_30d_proc", "reint_30d_alta"]]
+        .max()
+    )
+
+    # Remove colunas antigas (se existirem) e faz merge limpo
+    df = df.drop(columns=["reint_30d_proc", "reint_30d_alta"], errors="ignore")
+    df = df.merge(aux, on="codigo_internacao", how="left")
+
+    # Garante tipo booleano sem NaN
+    df["reint_30d_proc"] = df["reint_30d_proc"].fillna(False)
+    df["reint_30d_alta"] = df["reint_30d_alta"].fillna(False)
+
+    return df
