@@ -890,7 +890,7 @@ with tab_parquet:
 
 with tab_csv:
     c1, c2, c3 = st.columns(3)
-    evo = c1.file_uploader("EVOLUÇÕES (csv)", type=["csv"], key="evo")
+    evo = c1.file_uploader("CARACTERIZAÇÃO (csv)", type=["csv"], key="evo")
     proc = c2.file_uploader("PROCEDIMENTOS (csv)", type=["csv"], key="proc")
     cti = c3.file_uploader("CIDs/UTI (csv)", type=["csv"], key="cti")
     if evo and proc and cti:
