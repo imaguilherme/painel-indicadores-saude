@@ -56,7 +56,6 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-
     # ----------------- dias de permanência -----------------
     if {"data_internacao", "data_alta"}.issubset(df.columns):
         df["dias_permanencia"] = (df["data_alta"] - df["data_internacao"]).dt.days
@@ -444,7 +443,6 @@ def reinternacao_30d_pos_proced(df: pd.DataFrame):
     return (numer / base * 100) if base else np.nan
 
 
-
 def reinternacao_30d_pos_alta(df: pd.DataFrame):
     ok = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}.issubset(
         df.columns
@@ -560,7 +558,6 @@ def mortalidade_30d_pos_alta(df: pd.DataFrame):
     denom = e["codigo_internacao"].nunique()
     numer = e.loc[e["obito_30d_alta"], "codigo_internacao"].nunique()
     return (numer / denom * 100) if denom else np.nan
-#p.nan
 
 
 # --------------------------------------------------------------------
@@ -737,7 +734,7 @@ modo_perfil = st.toggle(
 base = df_pac if modo_perfil else df_f
 
 # --------------------------------------------------------------------
-# KPIs
+# KPIs GLOBAIS (BASE PARA OS BOTÕES)
 # --------------------------------------------------------------------
 
 pacientes, internacoes, tmi, mort_hosp = kpis(df_f, df_pac)
@@ -747,7 +744,6 @@ uti_pct = internacao_uti_pct(df_f)
 tmi_uti = tempo_medio_uti_dias(df_f)
 mort_30_proc = mortalidade_30d_pos_proced(df_f)
 mort_30_alta = mortalidade_30d_pos_alta(df_f)
-
 
 k1, k2, k3, k4, k5, k6 = st.columns(6)
 k1.metric(
@@ -775,7 +771,6 @@ k6.metric(
     f"{mort_hosp:.1f}%" if pd.notna(mort_hosp) else "—",
 )
 
-
 # --------------------------------------------------------------------
 # INDICADOR SELECIONADO (ESTILO iCardio)
 # --------------------------------------------------------------------
@@ -794,13 +789,14 @@ indicadores_icardio = [
     "Mortalidade em até 30 dias da alta (%)",
 ]
 
-st.markdown("### Indicadores disponíveis")
+st.markdown("### Indicadores disponíveis (botões iCardio)")
 
 indicador_selecionado = st.radio(
-    "Selecione o indicador para detalhar:",
+    "Selecione o indicador para detalhar e para o comparativo anual:",
     indicadores_icardio,
     horizontal=True,
 )
+
 
 def calcular_indicador(nome):
     if nome == "Quantidade de pacientes":
@@ -838,6 +834,47 @@ def calcular_indicador(nome):
 
     return np.nan
 
+
+def calcular_indicador_ano(nome, df_eventos_ano: pd.DataFrame, df_pacientes_ano: pd.DataFrame):
+    """
+    Calcula o mesmo indicador, mas apenas para um subconjunto (ex.: por ano),
+    para montar o comparativo anual em estilo iCardio.
+    """
+    pac_ano, int_ano, tmi_ano, mort_hosp_ano = kpis(df_eventos_ano, df_pacientes_ano)
+    ri_proc_ano = reinternacao_30d_pos_proced(df_eventos_ano)
+    ri_alta_ano = reinternacao_30d_pos_alta(df_eventos_ano)
+    uti_pct_ano = internacao_uti_pct(df_eventos_ano)
+    tmi_uti_ano = tempo_medio_uti_dias(df_eventos_ano)
+    mort_30_proc_ano = mortalidade_30d_pos_proced(df_eventos_ano)
+    mort_30_alta_ano = mortalidade_30d_pos_alta(df_eventos_ano)
+    qtd_proc_ano = df_eventos_ano["n_proced"].sum() if "n_proced" in df_eventos_ano.columns else np.nan
+
+    if nome == "Quantidade de pacientes":
+        return pac_ano
+    if nome == "Quantidade de internações":
+        return int_ano
+    if nome == "Quantidade de procedimentos":
+        return qtd_proc_ano
+    if nome == "Tempo médio de internação (dias)":
+        return tmi_ano
+    if nome == "Internação em UTI (%)":
+        return uti_pct_ano
+    if nome == "Tempo médio de internação em UTI (dias)":
+        return tmi_uti_ano
+    if nome == "Reinternação em até 30 dias do procedimento (%)":
+        return ri_proc_ano
+    if nome == "Reinternação em até 30 dias da alta (%)":
+        return ri_alta_ano
+    if nome == "Mortalidade hospitalar (%)":
+        return mort_hosp_ano
+    if nome == "Mortalidade em até 30 dias do procedimento (%)":
+        return mort_30_proc_ano
+    if nome == "Mortalidade em até 30 dias da alta (%)":
+        return mort_30_alta_ano
+
+    return np.nan
+
+
 valor_ind = calcular_indicador(indicador_selecionado)
 
 if "%" in indicador_selecionado:
@@ -853,17 +890,10 @@ st.metric("Valor do indicador selecionado", texto_valor)
 st.divider()
 
 # --------------------------------------------------------------------
-# COMPARATIVO ANUAL
+# COMPARATIVO ANUAL DO INDICADOR SELECIONADO
 # --------------------------------------------------------------------
 
-st.markdown("### Indicadores principais")
-
-indicador_top = st.radio(
-    "Selecione o indicador para o comparativo anual:",
-    ["Quantidade de pacientes", "Quantidade de internações"],
-    horizontal=True,
-    key="ind_top",
-)
+st.markdown("### Comparativo anual do indicador selecionado")
 
 ano_col = (
     "ano_internacao"
@@ -872,32 +902,35 @@ ano_col = (
 )
 
 if ano_col:
-    df_year = df_f[~df_f[ano_col].isna()].copy()
-    if not df_year.empty:
-        grp = df_year.groupby(ano_col)
+    df_valid = df_f[~df_f[ano_col].isna()].copy()
+    if not df_valid.empty:
+        anos_validos = sorted(df_valid[ano_col].dropna().unique())
+        linhas = []
+        for a in anos_validos:
+            df_ano = df_valid[df_valid[ano_col] == a]
+            df_pac_ano = pacientes_unicos(df_ano)
+            val_ano = calcular_indicador_ano(indicador_selecionado, df_ano, df_pac_ano)
+            linhas.append({ano_col: int(a), "valor": val_ano})
 
-        if indicador_top == "Quantidade de pacientes":
-            if "prontuario_anonimo" in df_year.columns:
-                serie = grp["prontuario_anonimo"].nunique()
+        df_plot = pd.DataFrame(linhas).dropna(subset=["valor"]).sort_values(ano_col)
+
+        if not df_plot.empty:
+            fig_ano = px.bar(df_plot, x=ano_col, y="valor", text_auto=True)
+
+            if "%" in indicador_selecionado:
+                y_label = indicador_selecionado
             else:
-                serie = grp.size()
-            y_label = "Pacientes distintos"
+                y_label = indicador_selecionado
+
+            fig_ano.update_layout(
+                xaxis_title="Ano",
+                yaxis_title=y_label,
+                height=280,
+                margin=dict(t=40, b=40),
+            )
+            st.plotly_chart(fig_ano, use_container_width=True)
         else:
-            if "codigo_internacao" in df_year.columns:
-                serie = grp["codigo_internacao"].nunique()
-            else:
-                serie = grp.size()
-            y_label = "Internações"
-
-        df_plot = serie.reset_index(name="valor").sort_values(ano_col)
-        fig_ano = px.bar(df_plot, x=ano_col, y="valor", text_auto=True)
-        fig_ano.update_layout(
-            xaxis_title="Ano",
-            yaxis_title=y_label,
-            height=280,
-            margin=dict(t=40, b=40),
-        )
-        st.plotly_chart(fig_ano, width="stretch")
+            st.info("Sem valores para o comparativo anual com o indicador selecionado.")
     else:
         st.info("Sem dados para o comparativo anual com os filtros atuais.")
 else:
