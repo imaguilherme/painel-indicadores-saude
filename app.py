@@ -377,15 +377,12 @@ def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
 def marcar_obito_periodo(df: pd.DataFrame) -> pd.DataFrame:
     if {"data_internacao", "data_alta"}.issubset(df.columns):
         e = df.copy()
+        # usa somente DATA_OBITO como fonte oficial de óbito
         if "data_obito" in e.columns:
             e["obito_no_periodo"] = (
-                (e["data_obito"].notna())
+                e["data_obito"].notna()
                 & (e["data_obito"] >= e["data_internacao"])
                 & (e["data_obito"] <= (e["data_alta"] - pd.Timedelta(days=1)))
-            )
-        elif "evolucao" in e.columns:
-            e["obito_no_periodo"] = e["evolucao"].astype(str).str.contains(
-                "ÓBITO", case=False, na=False
             )
         else:
             e["obito_no_periodo"] = False
@@ -538,15 +535,12 @@ def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
     mort_hosp = np.nan
     if {"data_internacao", "data_alta"}.issubset(df_eventos.columns):
         e = df_eventos.copy()
+        # usa somente DATA_OBITO como fonte oficial de óbito
         if "data_obito" in e.columns:
             e["obito_no_periodo"] = (
-                (e["data_obito"].notna())
+                e["data_obito"].notna()
                 & (e["data_obito"] >= e["data_internacao"])
                 & (e["data_obito"] <= (e["data_alta"] - pd.Timedelta(days=1)))
-            )
-        elif "evolucao" in e.columns:
-            e["obito_no_periodo"] = e["evolucao"].astype(str).str.contains(
-                "ÓBITO", case=False, na=False
             )
         else:
             e["obito_no_periodo"] = False
