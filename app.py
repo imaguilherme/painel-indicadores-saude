@@ -295,12 +295,12 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_file=None, sigtap_file=None, ge
                 ]
                 sig_small = sig_df[keep_cols].drop_duplicates(subset=[sig_code_col])
 
-              df_enriched = df_enriched.merge(
-    sig_small,
-    how="left",
-    left_on=proc_col,
-    right_on=sig_code_col,
-)
+                  df_enriched = df_enriched.merge(
+                    sig_small,
+                    how="left",
+                    left_on=proc_col,
+                    right_on=sig_code_col,
+                )
 
         except Exception as e:
             st.warning(f"Não foi possível enriquecer com SIGTAP: {e}")
