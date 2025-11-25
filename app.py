@@ -444,6 +444,7 @@ def reinternacao_30d_pos_proced(df: pd.DataFrame):
     return (numer / base * 100) if base else np.nan
 
 
+
 def reinternacao_30d_pos_alta(df: pd.DataFrame):
     ok = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}.issubset(
         df.columns
@@ -459,6 +460,107 @@ def reinternacao_30d_pos_alta(df: pd.DataFrame):
         s["delta"].between(0, 30, inclusive="both") & (~s["transfer"])
     ]["codigo_internacao"].nunique()
     return (numer / base * 100) if base else np.nan
+
+
+def internacao_uti_pct(df: pd.DataFrame):
+    """
+    Internação em UTI (%):
+    percentual de internações que tiveram passagem pela UTI.
+    """
+    if "codigo_internacao" not in df.columns:
+        return np.nan
+
+    e = df.copy()
+
+    uti_flag = pd.Series(False, index=e.index)
+
+    if "dt_entrada_cti" in e.columns:
+        uti_flag = uti_flag | e["dt_entrada_cti"].notna()
+    if "dt_saida_cti" in e.columns:
+        uti_flag = uti_flag | e["dt_saida_cti"].notna()
+
+    for cand in ["uti", "internacao_uti", "teve_uti"]:
+        if cand in e.columns:
+            uti_flag = uti_flag | e[cand].astype(str).str.upper().isin(
+                ["1", "S", "SIM", "TRUE", "VERDADEIRO"]
+            )
+
+    e["uti_flag"] = uti_flag
+
+    denom = e["codigo_internacao"].nunique()
+    numer = e.loc[e["uti_flag"], "codigo_internacao"].nunique()
+    return (numer / denom * 100) if denom else np.nan
+
+
+def tempo_medio_uti_dias(df: pd.DataFrame):
+    """
+    Tempo médio de internação em UTI (dias).
+    """
+    if not {"dt_entrada_cti", "dt_saida_cti"}.issubset(df.columns):
+        return np.nan
+
+    e = df.copy()
+    dias_uti = (e["dt_saida_cti"] - e["dt_entrada_cti"]).dt.days
+    dias_uti = dias_uti.replace([np.inf, -np.inf], np.nan).dropna()
+    return dias_uti.mean() if len(dias_uti) else np.nan
+
+
+def mortalidade_30d_pos_proced(df: pd.DataFrame):
+    """
+    Mortalidade em até 30 dias do procedimento (%).
+    Usa como melhor proxy de data do procedimento:
+    data_procedimento > data_cirurgia > data_cirurgia_min > data_internacao.
+    """
+    if "data_obito" not in df.columns or "codigo_internacao" not in df.columns:
+        return np.nan
+
+    e = df.copy()
+
+    cand_datas = [
+        "data_procedimento",
+        "data_cirurgia",
+        "data_cirurgia_min",
+        "data_cirurgia_max",
+        "data_internacao",
+    ]
+    data_proc_col = next((c for c in cand_datas if c in e.columns), None)
+    if not data_proc_col:
+        return np.nan
+
+    e = (
+        e.sort_values(data_proc_col)
+        .groupby("codigo_internacao", as_index=False)
+        .first()
+    )
+
+    e["delta"] = (e["data_obito"] - e[data_proc_col]).dt.days
+    e["obito_30d_proc"] = e["delta"].between(0, 30, inclusive="both")
+
+    denom = e["codigo_internacao"].nunique()
+    numer = e.loc[e["obito_30d_proc"], "codigo_internacao"].nunique()
+    return (numer / denom * 100) if denom else np.nan
+
+
+def mortalidade_30d_pos_alta(df: pd.DataFrame):
+    """
+    Mortalidade em até 30 dias da alta (%).
+    """
+    if not {"data_alta", "data_obito", "codigo_internacao"}.issubset(df.columns):
+        return np.nan
+
+    e = (
+        df.sort_values("data_alta")
+        .groupby("codigo_internacao", as_index=False)
+        .tail(1)
+    )
+
+    e["delta"] = (e["data_obito"] - e["data_alta"]).dt.days
+    e["obito_30d_alta"] = e["delta"].between(0, 30, inclusive="both")
+
+    denom = e["codigo_internacao"].nunique()
+    numer = e.loc[e["obito_30d_alta"], "codigo_internacao"].nunique()
+    return (numer / denom * 100) if denom else np.nan
+p.nan
 
 
 # --------------------------------------------------------------------
@@ -641,6 +743,11 @@ base = df_pac if modo_perfil else df_f
 pacientes, internacoes, tmi, mort_hosp = kpis(df_f, df_pac)
 ri_proc = reinternacao_30d_pos_proced(df_f)
 ri_alta = reinternacao_30d_pos_alta(df_f)
+uti_pct = internacao_uti_pct(df_f)
+tmi_uti = tempo_medio_uti_dias(df_f)
+mort_30_proc = mortalidade_30d_pos_proced(df_f)
+mort_30_alta = mortalidade_30d_pos_alta(df_f)
+
 
 k1, k2, k3, k4, k5, k6 = st.columns(6)
 k1.metric(
@@ -667,6 +774,81 @@ k6.metric(
     "Mortalidade hospitalar",
     f"{mort_hosp:.1f}%" if pd.notna(mort_hosp) else "—",
 )
+
+
+# --------------------------------------------------------------------
+# INDICADOR SELECIONADO (ESTILO iCardio)
+# --------------------------------------------------------------------
+
+indicadores_icardio = [
+    "Quantidade de pacientes",
+    "Quantidade de internações",
+    "Quantidade de procedimentos",
+    "Tempo médio de internação (dias)",
+    "Internação em UTI (%)",
+    "Tempo médio de internação em UTI (dias)",
+    "Reinternação em até 30 dias do procedimento (%)",
+    "Reinternação em até 30 dias da alta (%)",
+    "Mortalidade hospitalar (%)",
+    "Mortalidade em até 30 dias do procedimento (%)",
+    "Mortalidade em até 30 dias da alta (%)",
+]
+
+st.markdown("### Indicadores disponíveis")
+
+indicador_selecionado = st.radio(
+    "Selecione o indicador para detalhar:",
+    indicadores_icardio,
+    horizontal=True,
+)
+
+def calcular_indicador(nome):
+    if nome == "Quantidade de pacientes":
+        return pacientes
+
+    if nome == "Quantidade de internações":
+        return internacoes
+
+    if nome == "Quantidade de procedimentos":
+        return df_f["n_proced"].sum() if "n_proced" in df_f.columns else np.nan
+
+    if nome == "Tempo médio de internação (dias)":
+        return tmi
+
+    if nome == "Internação em UTI (%)":
+        return uti_pct
+
+    if nome == "Tempo médio de internação em UTI (dias)":
+        return tmi_uti
+
+    if nome == "Reinternação em até 30 dias do procedimento (%)":
+        return ri_proc
+
+    if nome == "Reinternação em até 30 dias da alta (%)":
+        return ri_alta
+
+    if nome == "Mortalidade hospitalar (%)":
+        return mort_hosp
+
+    if nome == "Mortalidade em até 30 dias do procedimento (%)":
+        return mort_30_proc
+
+    if nome == "Mortalidade em até 30 dias da alta (%)":
+        return mort_30_alta
+
+    return np.nan
+
+valor_ind = calcular_indicador(indicador_selecionado)
+
+if "%" in indicador_selecionado:
+    texto_valor = f"{valor_ind:.2f}%" if pd.notna(valor_ind) else "—"
+else:
+    # usa separador de milhar com ponto para ficar no padrão brasileiro
+    texto_valor = (
+        f"{valor_ind:,.2f}".replace(",", ".") if pd.notna(valor_ind) else "—"
+    )
+
+st.metric("Valor do indicador selecionado", texto_valor)
 
 st.divider()
 
