@@ -560,7 +560,7 @@ def mortalidade_30d_pos_alta(df: pd.DataFrame):
     denom = e["codigo_internacao"].nunique()
     numer = e.loc[e["obito_30d_alta"], "codigo_internacao"].nunique()
     return (numer / denom * 100) if denom else np.nan
-p.nan
+#p.nan
 
 
 # --------------------------------------------------------------------
