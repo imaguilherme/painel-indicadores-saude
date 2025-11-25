@@ -1483,3 +1483,4 @@ with col_dir:
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Não encontrei informações de CID no dataset.")
+            
