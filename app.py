@@ -497,7 +497,7 @@ def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
         .max()
     )
 
-    # Aqui o DF original ainda não tem essas colunas, então o merge não cria _x/_y
+    
     df = df.merge(aux, on="codigo_internacao", how="left")
 
     df["reint_30d_proc"] = df["reint_30d_proc"].fillna(False)
