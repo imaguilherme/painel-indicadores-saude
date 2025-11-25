@@ -12,6 +12,41 @@ import duckdb
 import os
 import tempfile
 
+st.markdown("""
+<style>
+
+.indicadores-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.ind-btn {
+    padding: 8px 14px;
+    border-radius: 20px;
+    border: 1px solid #d1d1d1;
+    background-color: #ffffff;
+    font-size: 14px;
+    color: #333;
+    cursor: pointer;
+    transition: 0.15s;
+}
+
+.ind-btn:hover {
+    border-color: #ff4b4b;
+    color: #ff4b4b;
+}
+
+.ind-btn-selected {
+    background-color: #ff4b4b !important;
+    border-color: #ff4b4b !important;
+    color: #ffffff !important;
+    font-weight: 600;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
 
 
 st.set_page_config(page_title="Painel de Pacientes", layout="wide")
