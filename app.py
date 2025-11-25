@@ -12,68 +12,7 @@ import duckdb
 import os
 import tempfile
 
-st.markdown("""
-<style>
-/* Deixa o radio em layout horizontal e com wrap bonitinho */
-div[data-baseweb="radio"] > div {
-    flex-wrap: wrap;
-    gap: 0.35rem;
-}
-
-/* Esconde a bolinha e transforma o texto num chip/pill */
-div[data-baseweb="radio"] label > div:first-child {
-    display: none;
-}
-
-div[data-baseweb="radio"] label > div:nth-child(2) {
-    border-radius: 999px;
-    border: 1px solid #d0d0d0;
-    background-color: #ffffff;
-    padding: 6px 14px;
-    font-size: 0.85rem;
-    color: #333333;
-    transition: 0.15s;
-}
-
-/* Hover */
-div[data-baseweb="radio"] label:hover > div:nth-child(2) {
-    border-color: #ff4b4b;
-    color: #ff4b4b;
-}
-
-/* Selecionado */
-div[data-baseweb="radio"] input:checked + div {
-    background-color: #ff4b4b !important;
-    border-color: #ff4b4b !important;
-    color: #ffffff !important;
-    font-weight: 600;
-}
-</style>
-""", unsafe_allow_html=True)
-
-
-
-
 st.set_page_config(page_title="Painel de Pacientes", layout="wide")
-
-TRUE_VALUES = {"1", "TRUE", "T", "S", "SIM", "VERDADEIRO", "Y", "YES"}
-
-
-def limpa_bool_para_int(serie):
-    """
-    Converte qualquer coluna (bool/string/objeto) em 0/1 de forma segura.
-    - NaN vira False
-    - Strings são tratadas (sim, true, 1, etc.)
-    """
-    s = serie.copy()
-    s = s.fillna(False)
-
-    if s.dtype == bool:
-        return s.astype(int)
-
-    s = s.astype(str).str.strip().str.upper()
-    return s.isin(TRUE_VALUES).astype(int)
-
 
 # --------------------------------------------------------------------
 # FUNÇÕES DE CARGA E PRÉ-PROCESSAMENTO
@@ -125,18 +64,18 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     if "idade" in df.columns:
         bins = [
             -1,
-            0,
-            8,
-            17,
-            26,
-            35,
-            44,
-            53,
-            62,
-            71,
-            80,
-            89,
-            200,
+            0,  # < 1 ano
+            8,  # 01 a 08 anos
+            17,  # 09 a 17 anos
+            26,  # 18 a 26 anos
+            35,  # 27 a 35 anos
+            44,  # 36 a 44 anos
+            53,  # 45 a 53 anos
+            62,  # 54 a 62 anos
+            71,  # 63 a 71 anos
+            80,  # 72 a 80 anos
+            89,  # 81 a 89 anos
+            200,  # 90 anos ou mais
         ]
 
         labels = [
@@ -164,7 +103,8 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
 
     # ----------------- deduplicação -----------------
     keys = [
-        c for c in ["codigo_internacao", "prontuario_anonimo", "data_internacao", "data_alta"]
+        c
+        for c in ["codigo_internacao", "prontuario_anonimo", "data_internacao", "data_alta"]
         if c in df.columns
     ]
     if keys:
@@ -358,8 +298,8 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_file=None, sigtap_file=None, ge
                 df_enriched = df_enriched.merge(
                     sig_small,
                     how="left",
-                    left_on=proc_col,
-                    right_on=sig_code_col,
+                    left_on[proc_col],
+                    right_on[sig_code_col],
                 )
         except Exception as e:
             st.warning(f"Não foi possível enriquecer com SIGTAP: {e}")
@@ -495,37 +435,18 @@ def marcar_uti_flag(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Marca, por internação, se houve reinternação em até 30 dias
-    do procedimento e da alta.
-    """
     ok = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}.issubset(
         df.columns
     )
-
-    # Se não tiver as colunas mínimas, devolve o DF apenas com as flags = False
+    df["reint_30d_proc"] = False
+    df["reint_30d_alta"] = False
     if not ok:
-        df = df.copy()
-        if "reint_30d_proc" not in df.columns:
-            df["reint_30d_proc"] = False
-        if "reint_30d_alta" not in df.columns:
-            df["reint_30d_alta"] = False
         return df
 
-    df = df.copy()
-
-    # Ordena por paciente e datas
-    s = df.sort_values(
-        ["prontuario_anonimo", "data_internacao", "data_alta"]
-    ).copy()
-
-    # Próxima internação do mesmo paciente
+    s = df.sort_values(["prontuario_anonimo", "data_internacao", "data_alta"]).copy()
     s["next_dt_internacao"] = s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
-
     s["delta_proc"] = (s["next_dt_internacao"] - s["data_internacao"]).dt.days
     s["delta_pos_alta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
-
-    # transferência = internação em até 1 dia após a alta
     s["transfer"] = s["delta_pos_alta"] <= 1
 
     s["reint_30d_proc"] = s["delta_proc"].between(0, 30, inclusive="both") & (~s["transfer"])
@@ -536,15 +457,10 @@ def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
         .groupby("codigo_internacao", as_index=False)[["reint_30d_proc", "reint_30d_alta"]]
         .max()
     )
-
-    
     df = df.merge(aux, on="codigo_internacao", how="left")
-
     df["reint_30d_proc"] = df["reint_30d_proc"].fillna(False)
     df["reint_30d_alta"] = df["reint_30d_alta"].fillna(False)
-
     return df
-
 
 
 def marcar_mort_30d_proc(df: pd.DataFrame) -> pd.DataFrame:
@@ -557,7 +473,6 @@ def marcar_mort_30d_proc(df: pd.DataFrame) -> pd.DataFrame:
         "data_procedimento",
         "data_cirurgia",
         "data_cirurgia_min",
-        "data_cirurgia_max",
         "data_internacao",
     ]
     data_proc_col = next((c for c in cand_datas if c in e.columns), None)
@@ -811,65 +726,51 @@ def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFra
     df = df.copy()
     df["peso"] = 0.0
 
-    # ------------------- CONTAGEM BRUTA -------------------
     if indicador in ["Quantidade de pacientes", "Quantidade de internações"]:
         df["peso"] = 1.0
 
     elif indicador == "Quantidade de procedimentos":
         df["peso"] = df.get("n_proced", 0).fillna(0)
 
-    # ------------------- TEMPO (usa soma de dias) -------------------
     elif indicador == "Tempo médio de internação (dias)":
+        # soma dos dias de permanência; o gráfico mostra total de dias por categoria
         if "dias_permanencia" in df.columns:
-            df["dias_permanencia"] = (
-                df["dias_permanencia"]
-                .replace([np.inf, -np.inf], np.nan)
-                .fillna(0)
-                .clip(lower=0)
-            )
-            df["peso"] = df["dias_permanencia"]
+            df["peso"] = df["dias_permanencia"].clip(lower=0).fillna(0)
         else:
             df["peso"] = 0.0
+
+    elif indicador == "Internação em UTI (%)":
+        df = marcar_uti_flag(df)
+        df["peso"] = df["uti_flag"].astype(int)
 
     elif indicador == "Tempo médio de internação em UTI (dias)":
         if {"dt_entrada_cti", "dt_saida_cti"}.issubset(df.columns):
             dias_uti = (df["dt_saida_cti"] - df["dt_entrada_cti"]).dt.days
-            dias_uti = (
-                dias_uti.replace([np.inf, -np.inf], np.nan)
-                .fillna(0)
-                .clip(lower=0)
-            )
-            df["peso"] = dias_uti
+            df["peso"] = dias_uti.clip(lower=0).fillna(0)
         else:
             df["peso"] = 0.0
 
-    # ------------------- FLAGS BOOLEANAS -------------------
-    elif indicador == "Internação em UTI (%)":
-        df = marcar_uti_flag(df)
-        df["peso"] = limpa_bool_para_int(df["uti_flag"])
-
     elif indicador == "Reinternação em até 30 dias do procedimento (%)":
         df = marcar_reinternacoes(df)
-        df["peso"] = limpa_bool_para_int(df["reint_30d_proc"])
+        df["peso"] = df["reint_30d_proc"].astype(int)
 
     elif indicador == "Reinternação em até 30 dias da alta (%)":
         df = marcar_reinternacoes(df)
-        df["peso"] = limpa_bool_para_int(df["reint_30d_alta"])
+        df["peso"] = df["reint_30d_alta"].astype(int)
 
     elif indicador == "Mortalidade hospitalar (%)":
         df = marcar_obito_periodo(df)
-        df["peso"] = limpa_bool_para_int(df["obito_no_periodo"])
+        df["peso"] = df["obito_no_periodo"].astype(int)
 
     elif indicador == "Mortalidade em até 30 dias do procedimento (%)":
         df = marcar_mort_30d_proc(df)
-        df["peso"] = limpa_bool_para_int(df["obito_30d_proc"])
+        df["peso"] = df["obito_30d_proc"].astype(int)
 
     elif indicador == "Mortalidade em até 30 dias da alta (%)":
         df = marcar_mort_30d_alta(df)
-        df["peso"] = limpa_bool_para_int(df["obito_30d_alta"])
+        df["peso"] = df["obito_30d_alta"].astype(int)
 
     return df
-
 
 
 # --------------------------------------------------------------------
@@ -1082,11 +983,48 @@ k6.metric(
     f"{mort_hosp:.1f}%" if pd.notna(mort_hosp) else "—",
 )
 
+
 # --------------------------------------------------------------------
 # INDICADOR SELECIONADO
 # --------------------------------------------------------------------
 
-indicadores = [
+st.markdown("""
+<style>
+div[data-baseweb="radio"] > div {
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+div[data-baseweb="radio"] label > div:first-child {
+    display: none;
+}
+
+div[data-baseweb="radio"] label > div:nth-child(2) {
+    border-radius: 999px;
+    border: 1px solid #d0d0d0;
+    background-color: #ffffff;
+    padding: 6px 14px;
+    font-size: 0.85rem;
+    color: #333333;
+    transition: 0.15s;
+}
+
+div[data-baseweb="radio"] label:hover > div:nth-child(2) {
+    border-color: #ff4b4b;
+    color: #ff4b4b;
+}
+
+div[data-baseweb="radio"] input:checked + div {
+    background-color: #ff4b4b !important;
+    border-color: #ff4b4b !important;
+    color: #ffffff !important;
+    font-weight: 600;
+}
+</style>
+""", unsafe_allow_html=True)
+# --------------------------------------------------------------------
+
+indicadores_icardio = [
     "Quantidade de pacientes",
     "Quantidade de internações",
     "Quantidade de procedimentos",
@@ -1104,44 +1042,9 @@ st.markdown("### Indicadores disponíveis")
 
 indicador_selecionado = st.radio(
     "Selecione o indicador para detalhar e para o comparativo anual:",
-    indicadores,
+    indicadores_icardio,
     horizontal=True,
 )
-
-
-# estado
-if "indicador_selecionado" not in st.session_state:
-    st.session_state["indicador_selecionado"] = indicadores[0]
-
-# container de botões
-st.markdown("<div class='indicadores-container'>", unsafe_allow_html=True)
-
-for i, ind in enumerate(indicadores):
-
-    # ver se é o selecionado
-    selected = (ind == st.session_state["indicador_selecionado"])
-
-    # classe do botão
-    classe = "ind-btn ind-btn-selected" if selected else "ind-btn"
-
-    # HTML do botão
-    btn = st.button(ind, key=f"btn_{i}")
-
-    # render visual
-    st.markdown(
-        f"<button class='{classe}'>{ind}</button>",
-        unsafe_allow_html=True
-    )
-
-    # lógica do clique (se clicado, muda o estado)
-    if btn:
-        st.session_state["indicador_selecionado"] = ind
-
-st.markdown("</div>", unsafe_allow_html=True)
-
-indicador_selecionado = st.session_state["indicador_selecionado"]
-
-
 
 def calcular_indicador(nome):
     if nome == "Quantidade de pacientes":
