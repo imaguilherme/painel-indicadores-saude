@@ -298,7 +298,7 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_file=None, sigtap_file=None, ge
                 df_enriched = df_enriched.merge(
                     sig_small,
                     how="left",
-                    left_on[proc_col],
+                    left_on=proc_col,
                     right_on[sig_code_col],
                 )
         except Exception as e:
