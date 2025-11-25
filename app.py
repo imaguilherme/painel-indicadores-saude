@@ -12,7 +12,28 @@ import duckdb
 import os
 import tempfile
 
+
+
 st.set_page_config(page_title="Painel de Pacientes", layout="wide")
+
+TRUE_VALUES = {"1", "TRUE", "T", "S", "SIM", "VERDADEIRO", "Y", "YES"}
+
+
+def limpa_bool_para_int(serie):
+    """
+    Converte qualquer coluna (bool/string/objeto) em 0/1 de forma segura.
+    - NaN vira False
+    - Strings são tratadas (sim, true, 1, etc.)
+    """
+    s = serie.copy()
+    s = s.fillna(False)
+
+    if s.dtype == bool:
+        return s.astype(int)
+
+    s = s.astype(str).str.strip().str.upper()
+    return s.isin(TRUE_VALUES).astype(int)
+
 
 # --------------------------------------------------------------------
 # FUNÇÕES DE CARGA E PRÉ-PROCESSAMENTO
