@@ -455,18 +455,37 @@ def marcar_uti_flag(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Marca, por internação, se houve reinternação em até 30 dias
+    do procedimento e da alta.
+    """
     ok = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}.issubset(
         df.columns
     )
-    df["reint_30d_proc"] = False
-    df["reint_30d_alta"] = False
+
+    # Se não tiver as colunas mínimas, devolve o DF apenas com as flags = False
     if not ok:
+        df = df.copy()
+        if "reint_30d_proc" not in df.columns:
+            df["reint_30d_proc"] = False
+        if "reint_30d_alta" not in df.columns:
+            df["reint_30d_alta"] = False
         return df
 
-    s = df.sort_values(["prontuario_anonimo", "data_internacao", "data_alta"]).copy()
+    df = df.copy()
+
+    # Ordena por paciente e datas
+    s = df.sort_values(
+        ["prontuario_anonimo", "data_internacao", "data_alta"]
+    ).copy()
+
+    # Próxima internação do mesmo paciente
     s["next_dt_internacao"] = s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
+
     s["delta_proc"] = (s["next_dt_internacao"] - s["data_internacao"]).dt.days
     s["delta_pos_alta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
+
+    # transferência = internação em até 1 dia após a alta
     s["transfer"] = s["delta_pos_alta"] <= 1
 
     s["reint_30d_proc"] = s["delta_proc"].between(0, 30, inclusive="both") & (~s["transfer"])
@@ -477,10 +496,15 @@ def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
         .groupby("codigo_internacao", as_index=False)[["reint_30d_proc", "reint_30d_alta"]]
         .max()
     )
+
+    # Aqui o DF original ainda não tem essas colunas, então o merge não cria _x/_y
     df = df.merge(aux, on="codigo_internacao", how="left")
+
     df["reint_30d_proc"] = df["reint_30d_proc"].fillna(False)
     df["reint_30d_alta"] = df["reint_30d_alta"].fillna(False)
+
     return df
+
 
 
 def marcar_mort_30d_proc(df: pd.DataFrame) -> pd.DataFrame:
