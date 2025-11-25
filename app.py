@@ -747,51 +747,65 @@ def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFra
     df = df.copy()
     df["peso"] = 0.0
 
+    # ------------------- CONTAGEM BRUTA -------------------
     if indicador in ["Quantidade de pacientes", "Quantidade de internações"]:
         df["peso"] = 1.0
 
     elif indicador == "Quantidade de procedimentos":
         df["peso"] = df.get("n_proced", 0).fillna(0)
 
+    # ------------------- TEMPO (usa soma de dias) -------------------
     elif indicador == "Tempo médio de internação (dias)":
-        # soma dos dias de permanência; o gráfico mostra total de dias por categoria
         if "dias_permanencia" in df.columns:
-            df["peso"] = df["dias_permanencia"].clip(lower=0).fillna(0)
+            df["dias_permanencia"] = (
+                df["dias_permanencia"]
+                .replace([np.inf, -np.inf], np.nan)
+                .fillna(0)
+                .clip(lower=0)
+            )
+            df["peso"] = df["dias_permanencia"]
         else:
             df["peso"] = 0.0
-
-    elif indicador == "Internação em UTI (%)":
-        df = marcar_uti_flag(df)
-        df["peso"] = df["uti_flag"].astype(int)
 
     elif indicador == "Tempo médio de internação em UTI (dias)":
         if {"dt_entrada_cti", "dt_saida_cti"}.issubset(df.columns):
             dias_uti = (df["dt_saida_cti"] - df["dt_entrada_cti"]).dt.days
-            df["peso"] = dias_uti.clip(lower=0).fillna(0)
+            dias_uti = (
+                dias_uti.replace([np.inf, -np.inf], np.nan)
+                .fillna(0)
+                .clip(lower=0)
+            )
+            df["peso"] = dias_uti
         else:
             df["peso"] = 0.0
 
+    # ------------------- FLAGS BOOLEANAS -------------------
+    elif indicador == "Internação em UTI (%)":
+        df = marcar_uti_flag(df)
+        df["peso"] = limpa_bool_para_int(df["uti_flag"])
+
     elif indicador == "Reinternação em até 30 dias do procedimento (%)":
         df = marcar_reinternacoes(df)
-        df["peso"] = df["reint_30d_proc"].astype(int)
+        df["peso"] = limpa_bool_para_int(df["reint_30d_proc"])
 
     elif indicador == "Reinternação em até 30 dias da alta (%)":
         df = marcar_reinternacoes(df)
-        df["peso"] = df["reint_30d_alta"].astype(int)
+        df["peso"] = limpa_bool_para_int(df["reint_30d_alta"])
 
     elif indicador == "Mortalidade hospitalar (%)":
         df = marcar_obito_periodo(df)
-        df["peso"] = df["obito_no_periodo"].astype(int)
+        df["peso"] = limpa_bool_para_int(df["obito_no_periodo"])
 
     elif indicador == "Mortalidade em até 30 dias do procedimento (%)":
         df = marcar_mort_30d_proc(df)
-        df["peso"] = df["obito_30d_proc"].astype(int)
+        df["peso"] = limpa_bool_para_int(df["obito_30d_proc"])
 
     elif indicador == "Mortalidade em até 30 dias da alta (%)":
         df = marcar_mort_30d_alta(df)
-        df["peso"] = df["obito_30d_alta"].astype(int)
+        df["peso"] = limpa_bool_para_int(df["obito_30d_alta"])
 
     return df
+
 
 
 # --------------------------------------------------------------------
