@@ -14,38 +14,43 @@ import tempfile
 
 st.markdown("""
 <style>
-
-.indicadores-container {
-    display: flex;
+/* Deixa o radio em layout horizontal e com wrap bonitinho */
+div[data-baseweb="radio"] > div {
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: 0.35rem;
 }
 
-.ind-btn {
-    padding: 8px 14px;
-    border-radius: 20px;
-    border: 1px solid #d1d1d1;
+/* Esconde a bolinha e transforma o texto num chip/pill */
+div[data-baseweb="radio"] label > div:first-child {
+    display: none;
+}
+
+div[data-baseweb="radio"] label > div:nth-child(2) {
+    border-radius: 999px;
+    border: 1px solid #d0d0d0;
     background-color: #ffffff;
-    font-size: 14px;
-    color: #333;
-    cursor: pointer;
+    padding: 6px 14px;
+    font-size: 0.85rem;
+    color: #333333;
     transition: 0.15s;
 }
 
-.ind-btn:hover {
+/* Hover */
+div[data-baseweb="radio"] label:hover > div:nth-child(2) {
     border-color: #ff4b4b;
     color: #ff4b4b;
 }
 
-.ind-btn-selected {
+/* Selecionado */
+div[data-baseweb="radio"] input:checked + div {
     background-color: #ff4b4b !important;
     border-color: #ff4b4b !important;
     color: #ffffff !important;
     font-weight: 600;
 }
-
 </style>
 """, unsafe_allow_html=True)
+
 
 
 
@@ -1096,7 +1101,13 @@ indicadores = [
 ]
 
 st.markdown("### Indicadores disponíveis")
-st.write("Selecione o indicador para detalhar e para o comparativo anual:")
+
+indicador_selecionado = st.radio(
+    "Selecione o indicador para detalhar e para o comparativo anual:",
+    indicadores,
+    horizontal=True,
+)
+
 
 # estado
 if "indicador_selecionado" not in st.session_state:
