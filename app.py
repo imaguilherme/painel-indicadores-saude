@@ -1098,34 +1098,36 @@ indicadores = [
 st.markdown("### Indicadores disponíveis")
 st.write("Selecione o indicador para detalhar e para o comparativo anual:")
 
-# estado inicial
+# estado
 if "indicador_selecionado" not in st.session_state:
     st.session_state["indicador_selecionado"] = indicadores[0]
 
-with st.container():
-    # wrapper para aplicar o CSS apenas aqui
-    st.markdown("<div class='indicadores-grid'>", unsafe_allow_html=True)
+# container de botões
+st.markdown("<div class='indicadores-container'>", unsafe_allow_html=True)
 
-    # quantos botões por linha
-    cols = st.columns(5)
+for i, ind in enumerate(indicadores):
 
-    for i, ind in enumerate(indicadores):
-        col = cols[i % len(cols)]
+    # ver se é o selecionado
+    selected = (ind == st.session_state["indicador_selecionado"])
 
-        # se for o selecionado, mostra um botão "fake" só de visual (sem clique)
-        if ind == st.session_state["indicador_selecionado"]:
-            col.markdown(
-                f"<button class='selected-indicador'>{ind}</button>",
-                unsafe_allow_html=True,
-            )
-        else:
-            # os demais são botões clicáveis
-            if col.button(ind, key=f"btn_ind_{i}", use_container_width=True):
-                st.session_state["indicador_selecionado"] = ind
+    # classe do botão
+    classe = "ind-btn ind-btn-selected" if selected else "ind-btn"
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    # HTML do botão
+    btn = st.button(ind, key=f"btn_{i}")
 
-# daqui pra baixo você usa normalmente:
+    # render visual
+    st.markdown(
+        f"<button class='{classe}'>{ind}</button>",
+        unsafe_allow_html=True
+    )
+
+    # lógica do clique (se clicado, muda o estado)
+    if btn:
+        st.session_state["indicador_selecionado"] = ind
+
+st.markdown("</div>", unsafe_allow_html=True)
+
 indicador_selecionado = st.session_state["indicador_selecionado"]
 
 
