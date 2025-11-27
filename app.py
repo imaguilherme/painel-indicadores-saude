@@ -1040,6 +1040,7 @@ indicador_selecionado = st.radio(
     horizontal=True,
 )
 
+
 def calcular_indicador(nome):
     if nome == "Quantidade de pacientes":
         return pacientes
@@ -1197,77 +1198,81 @@ with col_esq:
     c1, c2 = st.columns(2)
 
     # Sexo
-with c1:
-    st.subheader("Sexo")
-    if "sexo" in base_charts.columns:
-        df_sexo = (
-            base_charts.groupby("sexo", dropna=False)["peso"]
-            .sum()
-            .reset_index()
-            .rename(columns={"peso": "valor"})
-        )
+    with c1:
+        st.subheader("Sexo")
+        if "sexo" in base_charts.columns:
+            df_sexo = (
+                base_charts.groupby("sexo", dropna=False)["peso"]
+                .sum()
+                .reset_index()
+                .rename(columns={"peso": "valor"})
+            )
 
-        fig = px.bar(
-            df_sexo,
-            y=["Total"],
-            x="valor",
-            color="sexo",
-            orientation="h",
-            barmode="stack",
-            text_auto=True,
-            color_discrete_sequence=["#6794DC", "#E86F86"]
-        )
-        fig.update_layout(
-            height=120,
-            margin=dict(t=40, b=20),
-            showlegend=True,
-            xaxis_title="Quantidade",
-            yaxis_title=""
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Coluna 'sexo' não encontrada.")
+            # cria uma única linha "Total" só para fins de gráfico stacked
+            df_sexo["linha"] = "Total"
 
+            fig = px.bar(
+                df_sexo,
+                y="linha",
+                x="valor",
+                color="sexo",
+                orientation="h",
+                barmode="stack",
+                text="valor",
+                color_discrete_sequence=["#6794DC", "#E86F86"],
+            )
+            fig.update_layout(
+                height=120,
+                margin=dict(t=40, b=20),
+                showlegend=True,
+                xaxis_title="Quantidade",
+                yaxis_title="",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Coluna 'sexo' não encontrada.")
 
     # Caráter do atendimento
     with c2:
-    st.subheader("Caráter do atendimento")
+        st.subheader("Caráter do atendimento")
 
-    carater_col = None
-    for cand in ["carater_atendimento", "caracter_atendimento", "carater", "natureza_agend"]:
-        if cand in base_charts.columns:
-            carater_col = cand
-            break
+        carater_col = None
+        for cand in ["carater_atendimento", "caracter_atendimento", "carater", "natureza_agend"]:
+            if cand in base_charts.columns:
+                carater_col = cand
+                break
 
-    if carater_col:
-        df_car = (
-            base_charts.groupby(carater_col, dropna=False)["peso"]
-            .sum()
-            .reset_index()
-            .rename(columns={"peso": "valor"})
-        )
+        if carater_col:
+            df_car = (
+                base_charts.groupby(carater_col, dropna=False)["peso"]
+                .sum()
+                .reset_index()
+                .rename(columns={"peso": "valor"})
+            )
+            df_car["linha"] = "Total"
 
-        fig = px.bar(
-            df_car,
-            y=["Total"],
-            x="valor",
-            color=carater_col,
-            orientation="h",
-            barmode="stack",
-            text_auto=True,
-            color_discrete_sequence=px.colors.qualitative.Set2
-        )
+            fig = px.bar(
+                df_car,
+                y="linha",
+                x="valor",
+                color=carater_col,
+                orientation="h",
+                barmode="stack",
+                text="valor",
+                color_discrete_sequence=px.colors.qualitative.Set2,
+            )
 
-        fig.update_layout(
-            height=120,
-            margin=dict(t=40, b=40),
-            showlegend=True,
-            xaxis_title="Quantidade"
-        )
+            fig.update_layout(
+                height=120,
+                margin=dict(t=40, b=40),
+                showlegend=True,
+                xaxis_title="Quantidade",
+                yaxis_title="",
+            )
 
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Coluna de caráter não encontrada.")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Coluna de caráter não encontrada.")
 
     # PIRÂMIDE ETÁRIA
     st.subheader("Pirâmide Etária")
@@ -1371,34 +1376,31 @@ with col_meio:
         )
 
     st.subheader("Raça/Cor × Sexo")
-
-if {"etnia", "sexo"}.issubset(base_charts.columns):
-    df_etnia = (
-        base_charts.groupby(["etnia", "sexo"], dropna=False)["peso"]
-        .sum()
-        .reset_index(name="valor")
-    )
-
-    fig = px.bar(
-        df_etnia,
-        y="etnia",
-        x="valor",
-        color="sexo",
-        barmode="group",
-        orientation="h",
-        text_auto=True,
-        color_discrete_sequence=["#6794DC", "#E86F86"]
-    )
-
-    fig.update_layout(
-        height=300,
-        margin=dict(t=40, b=40),
-        yaxis_title="Raça/Cor",
-        xaxis_title="Quantidade",
-    )
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Requer colunas 'etnia' e 'sexo'.")
+    if {"etnia", "sexo"}.issubset(base_charts.columns):
+        df_etnia = (
+            base_charts.groupby(["etnia", "sexo"], dropna=False)["peso"]
+            .sum()
+            .reset_index(name="valor")
+        )
+        fig = px.bar(
+            df_etnia,
+            y="etnia",
+            x="valor",
+            color="sexo",
+            barmode="group",
+            orientation="h",
+            text_auto=True,
+            color_discrete_sequence=["#6794DC", "#E86F86"],
+        )
+        fig.update_layout(
+            xaxis_title="Quantidade",
+            yaxis_title="Raça/Cor",
+            height=320,
+            margin=dict(t=40, b=40),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Requer colunas 'etnia' e 'sexo'.")
 
 
 # ============================
@@ -1417,69 +1419,99 @@ with col_dir:
 
     st.markdown("---")
 
-   st.subheader("Procedimentos (amostra)")
-
-proc_cols = [c for c in base_charts.columns if "proc_nome_prim" in c.lower() or c.lower()=="procedimento"]
-if proc_cols:
-    pcol = proc_cols[0]
-    top_proc = (
-        base_charts.groupby(pcol, dropna=False)["peso"]
-        .sum()
-        .reset_index()
-        .rename(columns={"peso":"valor"})
-    )
-    top_proc = top_proc.sort_values("valor", ascending=True).tail(10)
-
-    fig = px.bar(
-        top_proc,
-        y=pcol,
-        x="valor",
-        orientation="h",
-        text_auto=True,
-        color_discrete_sequence=["#4C72B0"]
-    )
-
-    fig.update_layout(
-        height=300,
-        margin=dict(t=40, b=40),
-        xaxis_title="Quantidade",
-        yaxis_title=""
-    )
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Nenhuma coluna de procedimento encontrada.")
+    st.subheader("Procedimentos (amostra)")
+    proc_cols = [
+        c
+        for c in base_charts.columns
+        if "proc_nome_prim" in c.lower() or c.lower() == "procedimento"
+    ]
+    if proc_cols:
+        pcol = proc_cols[0]
+        top_proc = (
+            base_charts.groupby(pcol, dropna=False)["peso"]
+            .sum()
+            .reset_index()
+            .rename(columns={"peso": "valor"})
+        )
+        top_proc = top_proc.sort_values("valor", ascending=True).tail(10)
+        fig = px.bar(
+            top_proc,
+            y=pcol,
+            x="valor",
+            orientation="h",
+            text_auto=True,
+            color_discrete_sequence=["#4C72B0"],
+        )
+        fig.update_layout(
+            xaxis_title="Quantidade",
+            yaxis_title="",
+            height=260,
+            margin=dict(t=40, b=40),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Não encontrei coluna de procedimento agregada.")
 
     st.markdown("---")
 
     st.subheader("CID (capítulo / grupo) – amostra")
 
-if "cid_grupo" in base_charts.columns:
-    top_cid_grp = (
-        base_charts.groupby("cid_grupo", dropna=False)["peso"]
-        .sum()
-        .reset_index()
-        .rename(columns={"peso":"valor"})
-    )
-    top_cid_grp = top_cid_grp.sort_values("valor", ascending=True).tail(10)
-
-    fig = px.bar(
-        top_cid_grp,
-        y="cid_grupo",
-        x="valor",
-        orientation="h",
-        text_auto=True,
-        color_discrete_sequence=["#55A868"]
-    )
-
-    fig.update_layout(
-        height=300,
-        margin=dict(t=40, b=40),
-        xaxis_title="Quantidade",
-        yaxis_title=""
-    )
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("CID não disponível no dataset.")
+    if "cid_grupo" in base_charts.columns:
+        top_cid_grp = (
+            base_charts.groupby("cid_grupo", dropna=False)["peso"]
+            .sum()
+            .reset_index()
+            .rename(columns={"peso": "valor"})
+        )
+        top_cid_grp = top_cid_grp.sort_values("valor", ascending=True).tail(10)
+        fig = px.bar(
+            top_cid_grp,
+            y="cid_grupo",
+            x="valor",
+            orientation="h",
+            text_auto=True,
+            color_discrete_sequence=["#55A868"],
+        )
+        fig.update_layout(
+            xaxis_title="Quantidade",
+            yaxis_title="",
+            height=260,
+            margin=dict(t=40, b=40),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        cid_col = [
+            c
+            for c in base_charts.columns
+            if ("cid" in c.lower() or "descricao" in c.lower())
+        ]
+        if cid_col:
+            col_cid = cid_col[0]
+            top = (
+                base_charts.groupby(col_cid, dropna=False)["peso"]
+                .sum()
+                .reset_index()
+                .rename(columns={"peso": "valor"})
+            )
+            top[col_cid] = top[col_cid].astype(str).str.upper().str[:50]
+            top = top.sort_values("valor", ascending=True).tail(10)
+            fig = px.bar(
+                top,
+                y=col_cid,
+                x="valor",
+                orientation="h",
+                text_auto=True,
+                color_discrete_sequence=["#55A868"],
+            )
+            fig.update_layout(
+                xaxis_title="Quantidade",
+                yaxis_title="",
+                height=260,
+                margin=dict(t=40, b=40),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Não encontrei informações de CID no dataset.")
 
 
 # ============================
