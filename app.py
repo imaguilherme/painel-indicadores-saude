@@ -1197,20 +1197,37 @@ with col_esq:
     c1, c2 = st.columns(2)
 
     # Sexo
-    with c1:
-        st.subheader("Sexo")
-        if "sexo" in base_charts.columns:
-            df_sexo = (
-                base_charts.groupby("sexo", dropna=False)["peso"]
-                .sum()
-                .reset_index()
-                .rename(columns={"peso": "valor"})
-            )
-            fig = px.bar(df_sexo, x="sexo", y="valor", text_auto=True)
-            fig.update_layout(height=230, margin=dict(t=40, b=30))
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Coluna 'sexo' não encontrada.")
+with c1:
+    st.subheader("Sexo")
+    if "sexo" in base_charts.columns:
+        df_sexo = (
+            base_charts.groupby("sexo", dropna=False)["peso"]
+            .sum()
+            .reset_index()
+            .rename(columns={"peso": "valor"})
+        )
+
+        fig = px.bar(
+            df_sexo,
+            y=["Total"],
+            x="valor",
+            color="sexo",
+            orientation="h",
+            barmode="stack",
+            text_auto=True,
+            color_discrete_sequence=["#6794DC", "#E86F86"]
+        )
+        fig.update_layout(
+            height=120,
+            margin=dict(t=40, b=20),
+            showlegend=True,
+            xaxis_title="Quantidade",
+            yaxis_title=""
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Coluna 'sexo' não encontrada.")
+
 
     # Caráter do atendimento
     with c2:
