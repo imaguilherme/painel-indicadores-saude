@@ -927,13 +927,11 @@ df_pac = pacientes_unicos(df_f)
 show_active_filters(f)
 st.divider()
 
-modo_perfil = st.toggle(
-    "Contar por **paciente único** (perfil) nos gráficos quando o indicador for 'Quantidade de pacientes'.",
-    value=True,
-)
+# Sempre contar por paciente único quando o indicador for "Quantidade de pacientes"
+modo_perfil = True
 
 # --------------------------------------------------------------------
-# KPIs GLOBAIS
+# KPIs GLOBAIS (somente cálculo, sem exibir cards)
 # --------------------------------------------------------------------
 
 pacientes, internacoes, tmi, mort_hosp = kpis(df_f, df_pac)
@@ -943,32 +941,6 @@ uti_pct = internacao_uti_pct(df_f)
 tmi_uti = tempo_medio_uti_dias(df_f)
 mort_30_proc = mortalidade_30d_pos_proced(df_f)
 mort_30_alta = mortalidade_30d_pos_alta(df_f)
-
-k1, k2, k3, k4, k5, k6 = st.columns(6)
-k1.metric(
-    "Pacientes (distintos)",
-    f"{int(pacientes):,}".replace(",", ".") if pd.notna(pacientes) else "—",
-)
-k2.metric(
-    "Internações",
-    f"{int(internacoes):,}".replace(",", ".") if pd.notna(internacoes) else "—",
-)
-k3.metric(
-    "Tempo médio de internação (dias)",
-    f"{tmi:.1f}" if pd.notna(tmi) else "—",
-)
-k4.metric(
-    "Reinternação 30d (procedimento)",
-    f"{ri_proc:.1f}%" if pd.notna(ri_proc) else "—",
-)
-k5.metric(
-    "Reinternação 30d (alta)",
-    f"{ri_alta:.1f}%" if pd.notna(ri_alta) else "—",
-)
-k6.metric(
-    "Mortalidade hospitalar",
-    f"{mort_hosp:.1f}%" if pd.notna(mort_hosp) else "—",
-)
 
 
 # --------------------------------------------------------------------
