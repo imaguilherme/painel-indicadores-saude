@@ -1092,8 +1092,7 @@ else:
         f"{valor_ind:,.2f}".replace(",", ".") if pd.notna(valor_ind) else "—"
     )
 
-st.metric("Valor do indicador selecionado", texto_valor)
-
+# (antes tinha um st.metric aqui; agora o valor vai para o card da direita)
 st.divider()
 
 # --------------------------------------------------------------------
@@ -1372,15 +1371,17 @@ with col_meio:
 # COLUNA DIREITA
 # ============================
 with col_dir:
-    st.subheader("Quantidade de pacientes")
-    if pd.notna(pacientes):
+    # Card dinâmico do indicador selecionado
+    st.subheader(indicador_selecionado)
+    if pd.notna(valor_ind):
         st.markdown(
-            f"<h2 style='text-align:center;'>{int(pacientes):,}</h2>".replace(",", "."),
+            f"<h2 style='text-align:center;'>{texto_valor}</h2>",
             unsafe_allow_html=True,
         )
     else:
         st.markdown("<h2 style='text-align:center;'>—</h2>", unsafe_allow_html=True)
-    st.caption("Pacientes distintos no período filtrado")
+
+    st.caption("Valor do indicador no período filtrado")
 
     st.markdown("---")
 
