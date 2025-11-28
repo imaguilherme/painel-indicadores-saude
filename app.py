@@ -877,36 +877,29 @@ def show_active_filters(f):
 
 st.title("Perfil dos Pacientes")
 
-tab_parquet, tab_csv = st.tabs(["Parquet único (recomendado)", "3 CSVs (DuckDB)"])
-
 df = None
 
-with tab_parquet:
-    file_parquet = st.file_uploader(
-        "Carregue o Parquet único", type=["parquet"], key="pq"
-    )
-    if file_parquet:
-        df = load_parquet(file_parquet)
+st.subheader("Envie os 3 arquivos CSV")
 
-with tab_csv:
-    c1, c2, c3 = st.columns(3)
-    evo = c1.file_uploader("CARACTERIZAÇÃO (csv)", type=["csv"], key="evo")
-    proc = c2.file_uploader("PROCEDIMENTOS (csv)", type=["csv"], key="proc")
-    cti = c3.file_uploader("CIDs/UTI (csv)", type=["csv"], key="cti")
-    if evo and proc and cti:
-        tmpdir = tempfile.mkdtemp()
-        p_evo = os.path.join(tmpdir, "evo.csv")
-        p_proc = os.path.join(tmpdir, "proc.csv")
-        p_cti = os.path.join(tmpdir, "cti.csv")
-        open(p_evo, "wb").write(evo.getbuffer())
-        open(p_proc, "wb").write(proc.getbuffer())
-        open(p_cti, "wb").write(cti.getbuffer())
-        con = load_duckdb((p_evo, p_proc, p_cti))
-        df = df_from_duckdb(con, "SELECT * FROM dataset")
-        df = _post_load(df)
+c1, c2, c3 = st.columns(3)
+evo = c1.file_uploader("CARACTERIZAÇÃO (csv)", type=["csv"], key="evo")
+proc = c2.file_uploader("PROCEDIMENTOS (csv)", type=["csv"], key="proc")
+cti = c3.file_uploader("CIDs/UTI (csv)", type=["csv"], key="cti")
+
+if evo and proc and cti:
+    tmpdir = tempfile.mkdtemp()
+    p_evo = os.path.join(tmpdir, "evo.csv")
+    p_proc = os.path.join(tmpdir, "proc.csv")
+    p_cti = os.path.join(tmpdir, "cti.csv")
+    open(p_evo, "wb").write(evo.getbuffer())
+    open(p_proc, "wb").write(proc.getbuffer())
+    open(p_cti, "wb").write(cti.getbuffer())
+    con = load_duckdb((p_evo, p_proc, p_cti))
+    df = df_from_duckdb(con, "SELECT * FROM dataset")
+    df = _post_load(df)
 
 if df is None or df.empty:
-    st.info("Carregue um Parquet ou os 3 CSVs para iniciar.")
+    st.info("Carregue os 3 CSVs para iniciar.")
     st.stop()
 
 with st.expander("Carregar tabelas auxiliares (opcional) – CID-10, SIGTAP e Regiões de Saúde"):
