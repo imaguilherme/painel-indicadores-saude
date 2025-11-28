@@ -1,10 +1,6 @@
-# app.py — Painel de Indicadores (Pacientes / Internações)
-# Requisitos: streamlit, pandas, numpy, plotly, duckdb, python-dateutil, pyarrow
-
 import streamlit as st
 import pandas as pd
 import numpy as np
-from dateutil import parser
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
@@ -18,12 +14,11 @@ st.set_page_config(page_title="Painel de Pacientes", layout="wide")
 # FUNÇÕES DE CARGA E PRÉ-PROCESSAMENTO
 # --------------------------------------------------------------------
 
-
 def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [c.lower() for c in df.columns]
 
-    # ----------------- datas -----------------
+    # Datas
     date_cols = [
         "data_internacao",
         "data_alta",
@@ -43,7 +38,7 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
 
-    # ----------------- ano da internação (derivado) -----------------
+    # Ano da internação
     if (
         "data_internacao" in df.columns
         and "ano_internacao" not in df.columns
@@ -51,21 +46,21 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     ):
         df["ano_internacao"] = df["data_internacao"].dt.year
 
-    # ----------------- numéricos básicos -----------------
+    # Numéricos básicos
     for c in ["idade", "ano", "ano_internacao"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # ----------------- dias de permanência -----------------
+    # Dias de permanência
     if {"data_internacao", "data_alta"}.issubset(df.columns):
         df["dias_permanencia"] = (df["data_alta"] - df["data_internacao"]).dt.days
 
-    # ----------------- faixas etárias customizadas -----------------
+    # Faixa etária
     if "idade" in df.columns:
         bins = [
             -1,
-            0,  # < 1 ano
-            8,  # 01 a 08 anos
+            0,   # < 1 ano
+            8,   # 01 a 08 anos
             17,  # 09 a 17 anos
             26,  # 18 a 26 anos
             35,  # 27 a 35 anos
@@ -75,9 +70,8 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
             71,  # 63 a 71 anos
             80,  # 72 a 80 anos
             89,  # 81 a 89 anos
-            200,  # 90 anos ou mais
+            200, # 90+ 
         ]
-
         labels = [
             "< 1 ano",
             "01 a 08 anos",
@@ -92,7 +86,6 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
             "81 a 89 anos",
             "90 anos ou mais",
         ]
-
         df["faixa_etaria"] = pd.cut(
             pd.to_numeric(df["idade"], errors="coerce"),
             bins=bins,
@@ -101,7 +94,7 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
             include_lowest=True,
         )
 
-    # ----------------- deduplicação -----------------
+    # Deduplicação básica
     keys = [
         c
         for c in ["codigo_internacao", "prontuario_anonimo", "data_internacao", "data_alta"]
@@ -112,18 +105,8 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-
-@st.cache_data(show_spinner=False)
-def load_parquet(file):
-    return _post_load(pd.read_parquet(file))
-
-
 @st.cache_resource(show_spinner=False)
 def load_duckdb(csv_paths):
-    """
-    Carrega EVOLUÇÕES, PROCEDIMENTOS e CIDS via DuckDB
-    e monta a view 'dataset' ligada por PRONTUARIO_ANONIMO.
-    """
     con = duckdb.connect(database=":memory:")
     evo, proc, cti = csv_paths
 
@@ -145,12 +128,10 @@ def load_duckdb(csv_paths):
             """
         )
 
-    # cria as 3 views brutas
     make_view("evolu", evo)
     make_view("proced", proc)
     make_view("cids", cti)
 
-    # normaliza prontuário e agrega procedimentos
     con.execute(
         """
         CREATE VIEW evolu_n AS
@@ -171,7 +152,6 @@ def load_duckdb(csv_paths):
             *
         FROM proced;
 
-        -- agregação por prontuário para não multiplicar linhas
         CREATE VIEW proc_agg AS
         SELECT
             prontuario_anonimo,
@@ -182,7 +162,6 @@ def load_duckdb(csv_paths):
         FROM proc_n
         GROUP BY prontuario_anonimo;
 
-        -- dataset final
         CREATE VIEW dataset AS
         SELECT
             e.*,
@@ -193,37 +172,25 @@ def load_duckdb(csv_paths):
         LEFT JOIN proc_agg p USING (prontuario_anonimo);
         """
     )
-
     return con
-
 
 def df_from_duckdb(con, sql: str) -> pd.DataFrame:
     return con.execute(sql).df()
 
-
 # --------------------------------------------------------------------
-# ENRIQUECIMENTO COM TABELAS AUXILIARES (CID, SIGTAP, GEO)
+# ENRIQUECIMENTO OPCIONAL (CID, SIGTAP, GEO)
 # --------------------------------------------------------------------
-
 
 def enrich_with_aux_tables(df: pd.DataFrame, cid_file=None, sigtap_file=None, geo_file=None) -> pd.DataFrame:
-    """
-    Enriquecimento opcional com:
-    - CID-10 (capítulo / grupo)
-    - Procedimentos SIGTAP (grupo / subgrupo / forma org.)
-    - Geografia (UF / macro / região de saúde)
-    """
     if df is None:
         return df
-
     df_enriched = df.copy()
 
-    # -------- CID-10 --------
+    # CID-10
     if cid_file is not None:
         try:
             cid_df = pd.read_csv(cid_file, dtype=str)
             cid_df.columns = [c.lower() for c in cid_df.columns]
-
             cid_code_col = next((c for c in cid_df.columns if "cid" in c), None)
 
             if cid_code_col and ("cid" in df_enriched.columns or "cids" in df_enriched.columns):
@@ -251,7 +218,6 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_file=None, sigtap_file=None, ge
                     if any(k in c for k in ["capítulo", "capitulo", "grupo"])
                 ]
                 cid_small = cid_df[keep_cols].drop_duplicates(subset=["cid3"])
-
                 df_enriched = df_enriched.merge(cid_small, how="left", on="cid3")
 
                 rename_cols = {}
@@ -266,23 +232,20 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_file=None, sigtap_file=None, ge
         except Exception as e:
             st.warning(f"Não foi possível enriquecer com CID-10: {e}")
 
-    # -------- Procedimentos (SIGTAP) --------
+    # SIGTAP
     if sigtap_file is not None:
         try:
             sig_df = pd.read_csv(sigtap_file, dtype=str)
             sig_df.columns = [c.lower() for c in sig_df.columns]
-
             sig_code_col = next(
                 (c for c in sig_df.columns if "proced" in c and ("cod" in c or "codigo" in c)),
                 None,
             )
-
             proc_col = None
             for cand in ["proc_prim", "codigo_procedimento", "cod_procedimento"]:
                 if cand in df_enriched.columns:
                     proc_col = cand
                     break
-
             if sig_code_col and proc_col:
                 df_enriched[proc_col] = df_enriched[proc_col].astype(str).str.strip()
                 sig_df[sig_code_col] = sig_df[sig_code_col].astype(str).str.strip()
@@ -294,7 +257,6 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_file=None, sigtap_file=None, ge
                     if any(k in c for k in ["grupo", "subgrupo", "forma", "nome"])
                 ]
                 sig_small = sig_df[keep_cols].drop_duplicates(subset=[sig_code_col])
-
                 df_enriched = df_enriched.merge(
                     sig_small,
                     how="left",
@@ -304,28 +266,20 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_file=None, sigtap_file=None, ge
         except Exception as e:
             st.warning(f"Não foi possível enriquecer com SIGTAP: {e}")
 
-    # -------- Geografia (UF / Macro / Região de Saúde) --------
+    # GEO
     if geo_file is not None:
         try:
             geo_df = pd.read_csv(geo_file, dtype=str)
             geo_df.columns = [c.lower() for c in geo_df.columns]
-
-            if "cidade_moradia" in df_enriched.columns and {"no_municipio", "sg_uf"}.issubset(
-                geo_df.columns
-            ):
-                # CIDADE_MORADIA está no formato "cidade, UF"
-                partes = (
-                    df_enriched["cidade_moradia"].astype(str).str.split(",", n=1, expand=True)
-                )
+            if "cidade_moradia" in df_enriched.columns and {"no_municipio", "sg_uf"}.issubset(geo_df.columns):
+                partes = df_enriched["cidade_moradia"].astype(str).str.split(",", n=1, expand=True)
                 df_enriched["cidade_nome_norm"] = partes[0].str.upper().str.strip()
                 if partes.shape[1] > 1:
                     df_enriched["uf_from_cidade"] = partes[1].str.upper().str.strip()
                 else:
                     df_enriched["uf_from_cidade"] = np.nan
 
-                geo_df["no_municipio_norm"] = (
-                    geo_df["no_municipio"].astype(str).str.upper().str.strip()
-                )
+                geo_df["no_municipio_norm"] = geo_df["no_municipio"].astype(str).str.upper().str.strip()
                 geo_df["sg_uf"] = geo_df["sg_uf"].astype(str).str.upper().str.strip()
 
                 geo_small = geo_df[
@@ -356,11 +310,9 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_file=None, sigtap_file=None, ge
 
     return df_enriched
 
-
 # --------------------------------------------------------------------
 # FUNÇÕES DE MÉTRICAS / KPI
 # --------------------------------------------------------------------
-
 
 def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
     if {"prontuario_anonimo", "data_internacao"}.issubset(df.columns):
@@ -373,11 +325,9 @@ def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
         return df.drop_duplicates(subset=["prontuario_anonimo"])
     return df
 
-
 def marcar_obito_periodo(df: pd.DataFrame) -> pd.DataFrame:
     if {"data_internacao", "data_alta"}.issubset(df.columns):
         e = df.copy()
-        # usa somente DATA_OBITO como fonte oficial de óbito
         if "data_obito" in e.columns:
             e["obito_no_periodo"] = (
                 e["data_obito"].notna()
@@ -399,7 +349,6 @@ def marcar_obito_periodo(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["obito_no_periodo"] = False
     return df
-
 
 def marcar_uti_flag(df: pd.DataFrame) -> pd.DataFrame:
     if "codigo_internacao" not in df.columns:
@@ -430,20 +379,25 @@ def marcar_uti_flag(df: pd.DataFrame) -> pd.DataFrame:
     df["uti_flag"] = df["uti_flag"].fillna(False)
     return df
 
-
 def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
-    ok = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}.issubset(
-        df.columns
-    )
-    df["reint_30d_proc"] = False
-    df["reint_30d_alta"] = False
-    if not ok:
+    """Marca reinternações em até 30 dias a partir do procedimento e da alta."""
+    df = df.copy()
+    required = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}
+    if not required.issubset(df.columns):
+        df["reint_30d_proc"] = False
+        df["reint_30d_alta"] = False
         return df
 
-    s = df.sort_values(["prontuario_anonimo", "data_internacao", "data_alta"]).copy()
+    s = df.sort_values(
+        ["prontuario_anonimo", "data_internacao", "data_alta"],
+        kind="mergesort"
+    ).copy()
+
     s["next_dt_internacao"] = s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
+
     s["delta_proc"] = (s["next_dt_internacao"] - s["data_internacao"]).dt.days
     s["delta_pos_alta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
+
     s["transfer"] = s["delta_pos_alta"] <= 1
 
     s["reint_30d_proc"] = s["delta_proc"].between(0, 30, inclusive="both") & (~s["transfer"])
@@ -454,11 +408,12 @@ def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
         .groupby("codigo_internacao", as_index=False)[["reint_30d_proc", "reint_30d_alta"]]
         .max()
     )
+
+    df = df.drop(columns=["reint_30d_proc", "reint_30d_alta"], errors="ignore")
     df = df.merge(aux, on="codigo_internacao", how="left")
     df["reint_30d_proc"] = df["reint_30d_proc"].fillna(False)
     df["reint_30d_alta"] = df["reint_30d_alta"].fillna(False)
     return df
-
 
 def marcar_mort_30d_proc(df: pd.DataFrame) -> pd.DataFrame:
     if "data_obito" not in df.columns or "codigo_internacao" not in df.columns:
@@ -491,7 +446,6 @@ def marcar_mort_30d_proc(df: pd.DataFrame) -> pd.DataFrame:
     df["obito_30d_proc"] = df["obito_30d_proc"].fillna(False)
     return df
 
-
 def marcar_mort_30d_alta(df: pd.DataFrame) -> pd.DataFrame:
     if not {"data_alta", "data_obito", "codigo_internacao"}.issubset(df.columns):
         df["obito_30d_alta"] = False
@@ -510,7 +464,6 @@ def marcar_mort_30d_alta(df: pd.DataFrame) -> pd.DataFrame:
     df = df.merge(aux, on="codigo_internacao", how="left")
     df["obito_30d_alta"] = df["obito_30d_alta"].fillna(False)
     return df
-
 
 def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
     pacientes = (
@@ -535,7 +488,6 @@ def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
     mort_hosp = np.nan
     if {"data_internacao", "data_alta"}.issubset(df_eventos.columns):
         e = df_eventos.copy()
-        # usa somente DATA_OBITO como fonte oficial de óbito
         if "data_obito" in e.columns:
             e["obito_no_periodo"] = (
                 e["data_obito"].notna()
@@ -560,7 +512,6 @@ def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
 
     return pacientes, internacoes, tmi, mort_hosp
 
-
 def reinternacao_30d_pos_proced(df: pd.DataFrame):
     ok = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}.issubset(
         df.columns
@@ -578,7 +529,6 @@ def reinternacao_30d_pos_proced(df: pd.DataFrame):
     ]["codigo_internacao"].nunique()
     return (numer / base * 100) if base else np.nan
 
-
 def reinternacao_30d_pos_alta(df: pd.DataFrame):
     ok = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}.issubset(
         df.columns
@@ -595,17 +545,11 @@ def reinternacao_30d_pos_alta(df: pd.DataFrame):
     ]["codigo_internacao"].nunique()
     return (numer / base * 100) if base else np.nan
 
-
 def internacao_uti_pct(df: pd.DataFrame):
-    """
-    Internação em UTI (%):
-    percentual de internações que tiveram passagem pela UTI.
-    """
     if "codigo_internacao" not in df.columns:
         return np.nan
 
     e = df.copy()
-
     uti_flag = pd.Series(False, index=e.index)
 
     if "dt_entrada_cti" in e.columns:
@@ -625,31 +569,19 @@ def internacao_uti_pct(df: pd.DataFrame):
     numer = e.loc[e["uti_flag"], "codigo_internacao"].nunique()
     return (numer / denom * 100) if denom else np.nan
 
-
 def tempo_medio_uti_dias(df: pd.DataFrame):
-    """
-    Tempo médio de internação em UTI (dias).
-    """
     if not {"dt_entrada_cti", "dt_saida_cti"}.issubset(df.columns):
         return np.nan
-
     e = df.copy()
     dias_uti = (e["dt_saida_cti"] - e["dt_entrada_cti"]).dt.days
     dias_uti = dias_uti.replace([np.inf, -np.inf], np.nan).dropna()
     return dias_uti.mean() if len(dias_uti) else np.nan
 
-
 def mortalidade_30d_pos_proced(df: pd.DataFrame):
-    """
-    Mortalidade em até 30 dias do procedimento (%).
-    Usa como melhor proxy de data do procedimento:
-    data_procedimento > data_cirurgia > data_cirurgia_min > data_internacao.
-    """
     if "data_obito" not in df.columns or "codigo_internacao" not in df.columns:
         return np.nan
 
     e = df.copy()
-
     cand_datas = [
         "data_procedimento",
         "data_cirurgia",
@@ -674,11 +606,7 @@ def mortalidade_30d_pos_proced(df: pd.DataFrame):
     numer = e.loc[e["obito_30d_proc"], "codigo_internacao"].nunique()
     return (numer / denom * 100) if denom else np.nan
 
-
 def mortalidade_30d_pos_alta(df: pd.DataFrame):
-    """
-    Mortalidade em até 30 dias da alta (%).
-    """
     if not {"data_alta", "data_obito", "codigo_internacao"}.issubset(df.columns):
         return np.nan
 
@@ -695,82 +623,54 @@ def mortalidade_30d_pos_alta(df: pd.DataFrame):
     numer = e.loc[e["obito_30d_alta"], "codigo_internacao"].nunique()
     return (numer / denom * 100) if denom else np.nan
 
-
 # --------------------------------------------------------------------
-# FUNÇÕES AUXILIARES PARA O INDICADOR SELECIONADO
+# AUXILIARES PARA INDICADOR
 # --------------------------------------------------------------------
-
 
 def definir_base_para_indicador(indicador, df_f, df_pac):
-    """
-    Define qual base será usada nos gráficos,
-    dependendo do indicador.
-    """
     if indicador == "Quantidade de pacientes":
         return df_pac.copy()
-    # Para todos os outros, trabalhamos em nível de internação/evento
     return df_f.copy()
 
-
 def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFrame:
-    """
-    Cria a coluna 'peso' que será somada nos gráficos.
-    A ideia é sempre usar CONTAGEM (soma de eventos) e não média.
-    """
     df = df.copy()
     df["peso"] = 0.0
 
     if indicador in ["Quantidade de pacientes", "Quantidade de internações"]:
         df["peso"] = 1.0
-
     elif indicador == "Quantidade de procedimentos":
         df["peso"] = df.get("n_proced", 0).fillna(0)
-
     elif indicador == "Tempo médio de internação (dias)":
-        # soma dos dias de permanência; o gráfico mostra total de dias por categoria
         if "dias_permanencia" in df.columns:
             df["peso"] = df["dias_permanencia"].clip(lower=0).fillna(0)
-        else:
-            df["peso"] = 0.0
-
     elif indicador == "Internação em UTI (%)":
         df = marcar_uti_flag(df)
         df["peso"] = df["uti_flag"].astype(int)
-
     elif indicador == "Tempo médio de internação em UTI (dias)":
         if {"dt_entrada_cti", "dt_saida_cti"}.issubset(df.columns):
             dias_uti = (df["dt_saida_cti"] - df["dt_entrada_cti"]).dt.days
             df["peso"] = dias_uti.clip(lower=0).fillna(0)
-        else:
-            df["peso"] = 0.0
-
     elif indicador == "Reinternação em até 30 dias do procedimento (%)":
         df = marcar_reinternacoes(df)
         df["peso"] = df["reint_30d_proc"].fillna(False).astype(int)
-
     elif indicador == "Reinternação em até 30 dias da alta (%)":
         df = marcar_reinternacoes(df)
         df["peso"] = df["reint_30d_alta"].fillna(False).astype(int)
-
     elif indicador == "Mortalidade hospitalar (%)":
         df = marcar_obito_periodo(df)
         df["peso"] = df["obito_no_periodo"].fillna(False).astype(int)
-
     elif indicador == "Mortalidade em até 30 dias do procedimento (%)":
         df = marcar_mort_30d_proc(df)
         df["peso"] = df["obito_30d_proc"].fillna(False).astype(int)
-
     elif indicador == "Mortalidade em até 30 dias da alta (%)":
         df = marcar_mort_30d_alta(df)
         df["peso"] = df["obito_30d_alta"].fillna(False).astype(int)
 
     return df
 
-
 # --------------------------------------------------------------------
 # FILTROS
 # --------------------------------------------------------------------
-
 
 def build_filters(df: pd.DataFrame):
     if df is None:
@@ -821,8 +721,19 @@ def build_filters(df: pd.DataFrame):
             "Município de residência (amostra)", cidade_vals, default=default_cidades
         )
 
-    return {"ano": ano_sel, "idade": idade_sel, "estado": estados_sel, "regiao": regioes_sel, "cidade": cidades_sel}
+    sexo_sel = []
+    if "sexo" in df.columns:
+        sexos = sorted(df["sexo"].dropna().astype(str).unique().tolist())
+        sexo_sel = st.sidebar.multiselect("Sexo", sexos, default=sexos)
 
+    return {
+        "ano": ano_sel,
+        "idade": idade_sel,
+        "estado": estados_sel,
+        "regiao": regioes_sel,
+        "cidade": cidades_sel,
+        "sexo": sexo_sel,
+    }
 
 def apply_filters(df: pd.DataFrame, f):
     if "ano_internacao" in df.columns and f["ano"]:
@@ -850,8 +761,10 @@ def apply_filters(df: pd.DataFrame, f):
     if "cidade_moradia" in df.columns and f["cidade"]:
         df = df[df["cidade_moradia"].isin(f["cidade"])]
 
-    return df
+    if "sexo" in df.columns and f["sexo"]:
+        df = df[df["sexo"].isin(f["sexo"])]
 
+    return df
 
 def show_active_filters(f):
     partes = []
@@ -865,14 +778,15 @@ def show_active_filters(f):
         partes.append("**Região de saúde:** " + ", ".join(f["regiao"]))
     if f["cidade"]:
         partes.append("**Município:** " + ", ".join(f["cidade"]))
+    if f["sexo"]:
+        partes.append("**Sexo:** " + ", ".join(f["sexo"]))
     if partes:
         st.markdown("**Filtros ativos:** " + " | ".join(partes))
     else:
         st.markdown("**Filtros ativos:** nenhum filtro aplicado.")
 
-
 # --------------------------------------------------------------------
-# INTERFACE
+# INTERFACE PRINCIPAL
 # --------------------------------------------------------------------
 
 st.title("Perfil dos Pacientes")
@@ -916,10 +830,7 @@ with st.expander("Carregar tabelas auxiliares (opcional) – CID-10, SIGTAP e Re
 if cid_file or sigtap_file or geo_file:
     df = enrich_with_aux_tables(df, cid_file, sigtap_file, geo_file)
 
-# --------------------------------------------------------------------
-# FILTROS E BASES
-# --------------------------------------------------------------------
-
+# Filtros
 f = build_filters(df)
 df_f = apply_filters(df, f)
 df_pac = pacientes_unicos(df_f)
@@ -927,13 +838,9 @@ df_pac = pacientes_unicos(df_f)
 show_active_filters(f)
 st.divider()
 
-# Sempre contar por paciente único quando o indicador for "Quantidade de pacientes"
-modo_perfil = True
+modo_perfil = True  # sempre contar paciente único quando indicador for "Quantidade de pacientes"
 
-# --------------------------------------------------------------------
-# KPIs GLOBAIS (somente cálculo, sem exibir cards)
-# --------------------------------------------------------------------
-
+# KPIs globais (para cálculo de indicadores)
 pacientes, internacoes, tmi, mort_hosp = kpis(df_f, df_pac)
 ri_proc = reinternacao_30d_pos_proced(df_f)
 ri_alta = reinternacao_30d_pos_alta(df_f)
@@ -942,22 +849,16 @@ tmi_uti = tempo_medio_uti_dias(df_f)
 mort_30_proc = mortalidade_30d_pos_proced(df_f)
 mort_30_alta = mortalidade_30d_pos_alta(df_f)
 
-
-# --------------------------------------------------------------------
-# INDICADOR SELECIONADO
-# --------------------------------------------------------------------
-
+# Estilo dos botões dos indicadores
 st.markdown("""
 <style>
 div[data-baseweb="radio"] > div {
     flex-wrap: wrap;
     gap: 0.35rem;
 }
-
 div[data-baseweb="radio"] label > div:first-child {
     display: none;
 }
-
 div[data-baseweb="radio"] label > div:nth-child(2) {
     border-radius: 999px;
     border: 1px solid #d0d0d0;
@@ -967,12 +868,10 @@ div[data-baseweb="radio"] label > div:nth-child(2) {
     color: #333333;
     transition: 0.15s;
 }
-
 div[data-baseweb="radio"] label:hover > div:nth-child(2) {
     border-color: #ff4b4b;
     color: #ff4b4b;
 }
-
 div[data-baseweb="radio"] input:checked + div {
     background-color: #ff4b4b !important;
     border-color: #ff4b4b !important;
@@ -981,7 +880,6 @@ div[data-baseweb="radio"] input:checked + div {
 }
 </style>
 """, unsafe_allow_html=True)
-# --------------------------------------------------------------------
 
 indicadores_icardio = [
     "Quantidade de pacientes",
@@ -1005,49 +903,32 @@ indicador_selecionado = st.radio(
     horizontal=True,
 )
 
-
 def calcular_indicador(nome):
     if nome == "Quantidade de pacientes":
         return pacientes
-
     if nome == "Quantidade de internações":
         return internacoes
-
     if nome == "Quantidade de procedimentos":
         return df_f["n_proced"].sum() if "n_proced" in df_f.columns else np.nan
-
     if nome == "Tempo médio de internação (dias)":
         return tmi
-
     if nome == "Internação em UTI (%)":
         return uti_pct
-
     if nome == "Tempo médio de internação em UTI (dias)":
         return tmi_uti
-
     if nome == "Reinternação em até 30 dias do procedimento (%)":
         return ri_proc
-
     if nome == "Reinternação em até 30 dias da alta (%)":
         return ri_alta
-
     if nome == "Mortalidade hospitalar (%)":
         return mort_hosp
-
     if nome == "Mortalidade em até 30 dias do procedimento (%)":
         return mort_30_proc
-
     if nome == "Mortalidade em até 30 dias da alta (%)":
         return mort_30_alta
-
     return np.nan
 
-
 def calcular_indicador_ano(nome, df_eventos_ano: pd.DataFrame, df_pacientes_ano: pd.DataFrame):
-    """
-    Calcula o mesmo indicador, mas apenas para um subconjunto (ex.: por ano),
-    para montar o comparativo anual.
-    """
     pac_ano, int_ano, tmi_ano, mort_hosp_ano = kpis(df_eventos_ano, df_pacientes_ano)
     ri_proc_ano = reinternacao_30d_pos_proced(df_eventos_ano)
     ri_alta_ano = reinternacao_30d_pos_alta(df_eventos_ano)
@@ -1079,25 +960,17 @@ def calcular_indicador_ano(nome, df_eventos_ano: pd.DataFrame, df_pacientes_ano:
         return mort_30_proc_ano
     if nome == "Mortalidade em até 30 dias da alta (%)":
         return mort_30_alta_ano
-
     return np.nan
 
-
 valor_ind = calcular_indicador(indicador_selecionado)
-
 if "%" in indicador_selecionado:
     texto_valor = f"{valor_ind:.2f}%" if pd.notna(valor_ind) else "—"
 else:
-    texto_valor = (
-        f"{valor_ind:,.2f}".replace(",", ".") if pd.notna(valor_ind) else "—"
-    )
+    texto_valor = f"{valor_ind:,.2f}".replace(",", ".") if pd.notna(valor_ind) else "—"
 
 st.divider()
 
-# --------------------------------------------------------------------
-# COMPARATIVO ANUAL DO INDICADOR SELECIONADO
-# --------------------------------------------------------------------
-
+# Comparativo anual
 st.markdown("### Comparativo anual do indicador selecionado")
 
 ano_col = (
@@ -1120,10 +993,7 @@ if ano_col:
         df_plot = pd.DataFrame(linhas).dropna(subset=["valor"]).sort_values(ano_col)
 
         if not df_plot.empty:
-            # Gráfico do comparativo anual
             fig_ano = px.bar(df_plot, x=ano_col, y="valor")
-
-            # Se for taxa/percentual, mostrar com 2 casas decimais e símbolo %
             if "%" in indicador_selecionado:
                 fig_ano.update_traces(
                     texttemplate="%{y:.2f}%",
@@ -1131,7 +1001,6 @@ if ano_col:
                 )
                 fig_ano.update_yaxes(tickformat=".2f")
             else:
-                # Outros indicadores: mostra o valor bruto
                 fig_ano.update_traces(
                     texttemplate="%{y}",
                     textposition="outside",
@@ -1153,10 +1022,7 @@ else:
 
 st.divider()
 
-# --------------------------------------------------------------------
-# BASE PARA OS GRÁFICOS (RESPONDE AO INDICADOR)
-# --------------------------------------------------------------------
-
+# Base para os gráficos
 if indicador_selecionado == "Quantidade de pacientes" and modo_perfil:
     base_charts = df_pac.copy()
 else:
@@ -1164,19 +1030,13 @@ else:
 
 base_charts = adicionar_peso_por_indicador(base_charts, indicador_selecionado)
 
-# --------------------------------------------------------------------
-# GRID PRINCIPAL (3 COLUNAS)
-# --------------------------------------------------------------------
-
+# GRID PRINCIPAL
 col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
 
-# ============================
-# COLUNA ESQUERDA
-# ============================
 with col_esq:
     c1, c2 = st.columns(2)
 
-    # Sexo
+    # Sexo (stacked bar horizontal, uma linha)
     with c1:
         st.subheader("Sexo")
         if "sexo" in base_charts.columns:
@@ -1186,10 +1046,7 @@ with col_esq:
                 .reset_index()
                 .rename(columns={"peso": "valor"})
             )
-
-            # cria uma única linha "Total" só para fins de gráfico stacked
             df_sexo["linha"] = "Total"
-
             fig = px.bar(
                 df_sexo,
                 y="linha",
@@ -1214,7 +1071,6 @@ with col_esq:
     # Caráter do atendimento
     with c2:
         st.subheader("Caráter do atendimento")
-
         carater_col = None
         for cand in ["carater_atendimento", "caracter_atendimento", "carater", "natureza_agend"]:
             if cand in base_charts.columns:
@@ -1229,7 +1085,6 @@ with col_esq:
                 .rename(columns={"peso": "valor"})
             )
             df_car["linha"] = "Total"
-
             fig = px.bar(
                 df_car,
                 y="linha",
@@ -1240,7 +1095,6 @@ with col_esq:
                 text="valor",
                 color_discrete_sequence=px.colors.qualitative.Set2,
             )
-
             fig.update_layout(
                 height=120,
                 margin=dict(t=40, b=40),
@@ -1248,14 +1102,12 @@ with col_esq:
                 xaxis_title="Quantidade",
                 yaxis_title="",
             )
-
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Coluna de caráter não encontrada.")
 
-    # PIRÂMIDE ETÁRIA
+    # Pirâmide Etária
     st.subheader("Pirâmide Etária")
-
     if {"faixa_etaria", "sexo"}.issubset(base_charts.columns):
         categorias = [
             "90 anos ou mais",
@@ -1323,14 +1175,9 @@ with col_esq:
         )
 
         st.plotly_chart(fig, use_container_width=True)
-
     else:
         st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
 
-
-# ============================
-# COLUNA DO MEIO
-# ============================
 with col_meio:
     st.subheader("Estado → Região de Saúde → Município de residência")
 
@@ -1381,12 +1228,7 @@ with col_meio:
     else:
         st.info("Requer colunas 'etnia' e 'sexo'.")
 
-
-# ============================
-# COLUNA DIREITA
-# ============================
 with col_dir:
-    # Card dinâmico do indicador selecionado
     st.subheader(indicador_selecionado)
     if pd.notna(valor_ind):
         st.markdown(
@@ -1395,7 +1237,6 @@ with col_dir:
         )
     else:
         st.markdown("<h2 style='text-align:center;'>—</h2>", unsafe_allow_html=True)
-
     st.caption("Valor do indicador no período filtrado")
 
     st.markdown("---")
@@ -1436,7 +1277,6 @@ with col_dir:
     st.markdown("---")
 
     st.subheader("CID (capítulo / grupo) – amostra")
-
     if "cid_grupo" in base_charts.columns:
         top_cid_grp = (
             base_charts.groupby("cid_grupo", dropna=False)["peso"]
@@ -1493,58 +1333,3 @@ with col_dir:
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Não encontrei informações de CID no dataset.")
-
-
-# ============================
-# VERSÃO ATUALIZADA DE marcar_reinternacoes
-# ============================
-def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
-    """Marca reinternações em até 30 dias a partir do procedimento e da alta.
-
-    - reint_30d_proc: se a próxima internação do mesmo prontuário inicia em até 30 dias da data de internação atual
-    - reint_30d_alta: se a próxima internação inicia em até 30 dias da data de alta atual
-    """
-    df = df.copy()
-    required = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}
-    # Garante as colunas, mesmo que vazias
-    if not required.issubset(df.columns):
-        df["reint_30d_proc"] = False
-        df["reint_30d_alta"] = False
-        return df
-
-    # Ordena por paciente e datas
-    s = df.sort_values(
-        ["prontuario_anonimo", "data_internacao", "data_alta"],
-        kind="mergesort"
-    ).copy()
-
-    # Próxima internação por paciente
-    s["next_dt_internacao"] = s.groupby("prontuario_anonimo")["data_internacao"].shift(-1)
-
-    # Diferenças em dias
-    s["delta_proc"] = (s["next_dt_internacao"] - s["data_internacao"]).dt.days
-    s["delta_pos_alta"] = (s["next_dt_internacao"] - s["data_alta"]).dt.days
-
-    # Transferência (internação subsequente até 1 dia após a alta)
-    s["transfer"] = s["delta_pos_alta"] <= 1
-
-    # Flags de reinternação (ignorando transferências)
-    s["reint_30d_proc"] = s["delta_proc"].between(0, 30, inclusive="both") & (~s["transfer"])
-    s["reint_30d_alta"] = s["delta_pos_alta"].between(0, 30, inclusive="both") & (~s["transfer"])
-
-    # Consolida por internação
-    aux = (
-        s[["codigo_internacao", "reint_30d_proc", "reint_30d_alta"]]
-        .groupby("codigo_internacao", as_index=False)[["reint_30d_proc", "reint_30d_alta"]]
-        .max()
-    )
-
-    # Remove colunas antigas (se existirem) e faz merge limpo
-    df = df.drop(columns=["reint_30d_proc", "reint_30d_alta"], errors="ignore")
-    df = df.merge(aux, on="codigo_internacao", how="left")
-
-    # Garante tipo booleano sem NaN
-    df["reint_30d_proc"] = df["reint_30d_proc"].fillna(False)
-    df["reint_30d_alta"] = df["reint_30d_alta"].fillna(False)
-
-    return df
