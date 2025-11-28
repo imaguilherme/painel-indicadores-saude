@@ -1092,7 +1092,6 @@ else:
         f"{valor_ind:,.2f}".replace(",", ".") if pd.notna(valor_ind) else "—"
     )
 
-# (antes tinha um st.metric aqui; agora o valor vai para o card da direita)
 st.divider()
 
 # --------------------------------------------------------------------
@@ -1121,7 +1120,23 @@ if ano_col:
         df_plot = pd.DataFrame(linhas).dropna(subset=["valor"]).sort_values(ano_col)
 
         if not df_plot.empty:
-            fig_ano = px.bar(df_plot, x=ano_col, y="valor", text_auto=True)
+            # Gráfico do comparativo anual
+            fig_ano = px.bar(df_plot, x=ano_col, y="valor")
+
+            # Se for taxa/percentual, mostrar com 2 casas decimais e símbolo %
+            if "%" in indicador_selecionado:
+                fig_ano.update_traces(
+                    texttemplate="%{y:.2f}%",
+                    textposition="outside",
+                )
+                fig_ano.update_yaxes(tickformat=".2f")
+            else:
+                # Outros indicadores: mostra o valor bruto
+                fig_ano.update_traces(
+                    texttemplate="%{y}",
+                    textposition="outside",
+                )
+
             fig_ano.update_layout(
                 xaxis_title="Ano",
                 yaxis_title=indicador_selecionado,
