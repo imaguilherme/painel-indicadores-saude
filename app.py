@@ -14,7 +14,6 @@ st.set_page_config(page_title="Painel de Pacientes", layout="wide")
 # FUNÇÕES DE CARGA E PRÉ-PROCESSAMENTO
 # --------------------------------------------------------------------
 
-
 def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [c.lower() for c in df.columns]
@@ -182,29 +181,28 @@ def df_from_duckdb(con, sql: str) -> pd.DataFrame:
     return con.execute(sql).df()
 
 
-# --------------------------------------------------------------------
-# ENRIQUECIMENTO OPCIONAL (CID, SIGTAP, GEO)
-# --------------------------------------------------------------------
-
-
 @st.cache_data
 def load_aux_tables():
     """
     Carrega as tabelas auxiliares de CID-10, SIGTAP e Regiões de Saúde
     a partir de arquivos CSV que já vêm junto com o app.
+    Os nomes esperados são:
+      - listacids.csv
+      - listaprocedimentos.csv
+      - regioesdesaude.csv
     """
     try:
-        cid_df = pd.read_csv("LIST_CID_2019_2021_BINDED.csv", dtype=str)
+        cid_df = pd.read_csv("listacids.csv", dtype=str)
     except FileNotFoundError:
         cid_df = None
 
     try:
-        sigtap_df = pd.read_csv("Matriz de Dados do SIGTAP.csv", dtype=str)
+        sigtap_df = pd.read_csv("listaprocedimentos.csv", dtype=str)
     except FileNotFoundError:
         sigtap_df = None
 
     try:
-        geo_df = pd.read_csv("UF_Macro_Região_Município.csv", dtype=str)
+        geo_df = pd.read_csv("regioesdesaude.csv", dtype=str)
     except FileNotFoundError:
         geo_df = None
 
@@ -212,11 +210,18 @@ def load_aux_tables():
 
 
 def enrich_with_aux_tables(df: pd.DataFrame, cid_df=None, sigtap_df=None, geo_df=None) -> pd.DataFrame:
+    """
+    Enriquecer o dataframe principal com:
+      - Capítulo / grupo CID-10 (tabela listacids.csv)
+      - Grupos de procedimento SIGTAP (tabela listaprocedimentos.csv)
+      - UF / Macrorregião / Região de Saúde (tabela regioesdesaude.csv)
+    Os parâmetros cid_df, sigtap_df e geo_df devem ser dataframes já carregados.
+    """
     if df is None:
         return df
     df_enriched = df.copy()
 
-    # CID-10
+    # ---------------- CID-10 ----------------
     if cid_df is not None:
         try:
             cid_df = cid_df.copy()
@@ -224,6 +229,7 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_df=None, sigtap_df=None, geo_df
             cid_code_col = next((c for c in cid_df.columns if "cid" in c), None)
 
             if cid_code_col and ("cid" in df_enriched.columns or "cids" in df_enriched.columns):
+                # se não houver coluna 'cid' mas houver 'cids' com lista, pega o primeiro da lista
                 if "cid" not in df_enriched.columns and "cids" in df_enriched.columns:
                     df_enriched["cid"] = (
                         df_enriched["cids"]
@@ -250,6 +256,7 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_df=None, sigtap_df=None, geo_df
                 cid_small = cid_df[keep_cols].drop_duplicates(subset=["cid3"])
                 df_enriched = df_enriched.merge(cid_small, how="left", on="cid3")
 
+                # renomeia colunas padronizando
                 rename_cols = {}
                 for c in df_enriched.columns:
                     cl = c.lower()
@@ -262,7 +269,7 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_df=None, sigtap_df=None, geo_df
         except Exception as e:
             st.warning(f"Não foi possível enriquecer com CID-10: {e}")
 
-    # SIGTAP
+    # ---------------- SIGTAP ----------------
     if sigtap_df is not None:
         try:
             sig_df = sigtap_df.copy()
@@ -296,7 +303,7 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_df=None, sigtap_df=None, geo_df
         except Exception as e:
             st.warning(f"Não foi possível enriquecer com SIGTAP: {e}")
 
-    # GEO
+    # ---------------- Regiões de Saúde ----------------
     if geo_df is not None:
         try:
             geo_df = geo_df.copy()
@@ -344,7 +351,6 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_df=None, sigtap_df=None, geo_df
 # --------------------------------------------------------------------
 # FUNÇÕES DE MÉTRICAS / KPI
 # --------------------------------------------------------------------
-
 
 def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
     if {"prontuario_anonimo", "data_internacao"}.issubset(df.columns):
@@ -672,7 +678,6 @@ def mortalidade_30d_pos_alta(df: pd.DataFrame):
 # AUXILIARES PARA INDICADOR
 # --------------------------------------------------------------------
 
-
 def definir_base_para_indicador(indicador, df_f, df_pac):
     if indicador == "Quantidade de pacientes":
         return df_pac.copy()
@@ -719,7 +724,6 @@ def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFra
 # --------------------------------------------------------------------
 # FILTROS
 # --------------------------------------------------------------------
-
 
 def build_filters(df: pd.DataFrame):
     if df is None:
@@ -841,7 +845,6 @@ def show_active_filters(f):
 # INTERFACE PRINCIPAL
 # --------------------------------------------------------------------
 
-
 st.title("Perfil dos Pacientes")
 
 df = None
@@ -869,9 +872,25 @@ if df is None or df.empty:
     st.info("Carregue os 3 CSVs para iniciar.")
     st.stop()
 
-# Carrega automaticamente as tabelas auxiliares de CID-10, SIGTAP e Regiões de Saúde
 cid_df, sigtap_df, geo_df = load_aux_tables()
 df = enrich_with_aux_tables(df, cid_df, sigtap_df, geo_df)
+
+with st.expander("Tabelas auxiliares – CID-10, SIGTAP e Regiões de Saúde (carregadas automaticamente)"):
+    if cid_df is not None:
+        st.success("Tabela de CIDs carregada (listacids.csv).")
+    else:
+        st.warning("Tabela de CIDs não encontrada (listacids.csv).")
+
+    if sigtap_df is not None:
+        st.success("Tabela de procedimentos SIGTAP carregada (listaprocedimentos.csv).")
+    else:
+        st.warning("Tabela de procedimentos SIGTAP não encontrada (listaprocedimentos.csv).")
+
+    if geo_df is not None:
+        st.success("Tabela de UF/Macro/Região/Município carregada (regioesdesaude.csv).")
+    else:
+        st.warning("Tabela de UF/Macro/Região/Município não encontrada (regioesdesaude.csv).")
+
 
 # Filtros
 f = build_filters(df)
