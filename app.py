@@ -874,24 +874,6 @@ if df is None or df.empty:
 
 cid_df, sigtap_df, geo_df = load_aux_tables()
 df = enrich_with_aux_tables(df, cid_df, sigtap_df, geo_df)
-
-with st.expander("Tabelas auxiliares – CID-10, SIGTAP e Regiões de Saúde (carregadas automaticamente)"):
-    if cid_df is not None:
-        st.success("Tabela de CIDs carregada (listacids.csv).")
-    else:
-        st.warning("Tabela de CIDs não encontrada (listacids.csv).")
-
-    if sigtap_df is not None:
-        st.success("Tabela de procedimentos SIGTAP carregada (listaprocedimentos.csv).")
-    else:
-        st.warning("Tabela de procedimentos SIGTAP não encontrada (listaprocedimentos.csv).")
-
-    if geo_df is not None:
-        st.success("Tabela de UF/Macro/Região/Município carregada (regioesdesaude.csv).")
-    else:
-        st.warning("Tabela de UF/Macro/Região/Município não encontrada (regioesdesaude.csv).")
-
-
 # Filtros
 f = build_filters(df)
 df_f = apply_filters(df, f)
