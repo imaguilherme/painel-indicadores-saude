@@ -816,19 +816,50 @@ if df is None or df.empty:
     st.info("Carregue os 3 CSVs para iniciar.")
     st.stop()
 
-with st.expander("Carregar tabelas auxiliares (opcional) – CID-10, SIGTAP e Regiões de Saúde"):
-    cid_file = st.file_uploader(
-        "Tabela de CIDs (LIST_CID_2019_2021_BINDED.csv)", type=["csv"], key="cid_map"
-    )
-    sigtap_file = st.file_uploader(
-        "Tabela de procedimentos SIGTAP (Matriz de Dados do SIGTAP.csv)", type=["csv"], key="sigtap_map"
-    )
-    geo_file = st.file_uploader(
-        "Tabela UF/Macro/Região/Município (UF_Macro_Região_Município.csv)", type=["csv"], key="geo_map"
-    )
+# --------------------------------------------------------------------
+# CARREGAR TABELAS AUXILIARES AUTOMATICAMENTE
+# --------------------------------------------------------------------
 
-if cid_file or sigtap_file or geo_file:
-    df = enrich_with_aux_tables(df, cid_file, sigtap_file, geo_file)
+app_dir = os.path.dirname(os.path.abspath(__file__))
+
+def _find_first_existing(filenames):
+    for fname in filenames:
+        path = os.path.join(app_dir, fname)
+        if os.path.exists(path):
+            return path
+    return None
+
+cid_path = _find_first_existing([
+    "LIST_CID_2019_2021_BINDED.csv",
+    "Lista de códigos dos CIDs e classificação em subcategoria, capítulo e grupos - LIST_CID_2019_2021_BINDED.csv",
+])
+
+sigtap_path = _find_first_existing([
+    "Matriz de Dados do SIGTAP.csv",
+    "Lista de códigos dos procedimentos e classificação em grupos.xlsx - Matriz de Dados do SIGTAP.csv",
+])
+
+geo_path = _find_first_existing([
+    "UF_Macro_Região_Município.csv",
+    "Regiões e Macrorregiões de Saúde.xlsx - UF_Macro_Região_Município.csv",
+])
+
+# Enriquecer automaticamente com as tabelas encontradas
+df = enrich_with_aux_tables(df, cid_file=cid_path, sigtap_file=sigtap_path, geo_file=geo_path)
+
+with st.expander("Tabelas auxiliares – CID-10, SIGTAP e Regiões de Saúde (carregadas automaticamente)"):
+    if cid_path:
+        st.success(f"CID-10: arquivo encontrado ({os.path.basename(cid_path)})")
+    else:
+        st.warning("CID-10: arquivo não encontrado na pasta do app.")
+    if sigtap_path:
+        st.success(f"SIGTAP: arquivo encontrado ({os.path.basename(sigtap_path)})")
+    else:
+        st.warning("SIGTAP: arquivo não encontrado na pasta do app.")
+    if geo_path:
+        st.success(f"UF/Macro/Região/Município: arquivo encontrado ({os.path.basename(geo_path)})")
+    else:
+        st.warning("UF/Macro/Região/Município: arquivo não encontrado na pasta do app.")
 
 # Filtros
 f = build_filters(df)
@@ -1198,7 +1229,7 @@ with col_meio:
     else:
         st.info(
             "Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis. "
-            "Carregue a tabela de Regiões de Saúde no painel para habilitar."
+            "Verifique se o arquivo de Regiões de Saúde está na pasta do app."
         )
 
     st.subheader("Raça/Cor × Sexo")
