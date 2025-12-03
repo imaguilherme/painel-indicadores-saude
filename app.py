@@ -1300,7 +1300,9 @@ with col_dir:
     st.markdown("---")
 
     st.subheader("CID (capítulo / grupo) – amostra")
-    if "cid_grupo" in base_charts.columns:
+
+    # 1) Se já tiver coluna de grupo de CID vinda da tabela auxiliar
+    if "cid_grupo" in base_charts.columns and base_charts["cid_grupo"].notna().any():
         top_cid_grp = (
             base_charts.groupby("cid_grupo", dropna=False)["peso"]
             .sum()
@@ -1323,21 +1325,30 @@ with col_dir:
             margin=dict(t=40, b=40),
         )
         st.plotly_chart(fig, use_container_width=True)
+
+    # 2) Senão, tenta achar alguma coluna de CID "bruta" (código ou descrição),
+    # evitando pegar 'cidade_moradia' por engano
     else:
-        cid_col = [
-            c
-            for c in base_charts.columns
-            if ("cid" in c.lower() or "descricao" in c.lower())
-        ]
-        if cid_col:
-            col_cid = cid_col[0]
+        cid_candidates = []
+        for c in base_charts.columns:
+            cl = c.lower()
+            # começa com 'cid' (cid, cid_principal, cid10 etc), mas NÃO é cidade
+            if cl.startswith("cid") and "cidade" not in cl:
+                cid_candidates.append(c)
+            # ou colunas clássicas de descrição de diagnóstico
+            elif "descricao_cid" in cl or "diagnostico" in cl or "diag_princ" in cl:
+                cid_candidates.append(c)
+
+        if cid_candidates:
+            col_cid = cid_candidates[0]
             top = (
                 base_charts.groupby(col_cid, dropna=False)["peso"]
                 .sum()
                 .reset_index()
                 .rename(columns={"peso": "valor"})
             )
-            top[col_cid] = top[col_cid].astype(str).str.upper().str[:50]
+            # deixa a descrição mais curtinha
+            top[col_cid] = top[col_cid].astype(str).str.upper().str[:60]
             top = top.sort_values("valor", ascending=True).tail(10)
             fig = px.bar(
                 top,
@@ -1355,7 +1366,7 @@ with col_dir:
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("Não encontrei informações de CID no dataset.")
+            st.info("Não encontrei nenhuma coluna de CID ou diagnóstico no dataset.")
 
 # --------------------------------------------------------------------
 # COMPARATIVO ANUAL (NO FINAL)
