@@ -1182,7 +1182,7 @@ with col_esq:
         ).rename(columns={"valor": "n"})
 
         pivot = tabela.pivot(index="faixa_etaria", columns="sexo", values="n").fillna(0)
-        pivot = pivot.reindex(categorias)
+        pivot = pivot.reindex(categorias).fillna(0)
 
         fig = go.Figure()
         palette = [
@@ -1206,13 +1206,23 @@ with col_esq:
             )
             color_index += 1
 
+        # eixo X com valores absolutos (sem sinal negativo)
+        max_abs = float(np.nanmax(np.abs(pivot.values))) if pivot.values.size > 0 else 0.0
+        if not np.isfinite(max_abs) or max_abs == 0:
+            max_abs = 1.0
+        tick_vals = np.linspace(-max_abs, max_abs, 5)
+        tick_text = [f"{abs(v):.1f}" for v in tick_vals]
+
+        fig.update_xaxes(
+            tickvals=tick_vals,
+            ticktext=tick_text,
+            title=label_eixo_x(indicador_selecionado),
+            showgrid=False,
+        )
+
         fig.update_layout(
             barmode="overlay",
             height=550,
-            xaxis=dict(
-                title=label_eixo_x(indicador_selecionado),
-                showgrid=False,
-            ),
             yaxis=dict(title="Faixa etária", autorange="reversed"),
             margin=dict(l=80, r=80, t=50, b=50),
             showlegend=True,
