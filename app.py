@@ -1092,37 +1092,64 @@ base_charts = adicionar_peso_por_indicador(base_charts, indicador_selecionado)
 
 col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
 
+# --------------------------------------------------------------------
+# COLUNA ESQUERDA (Sexo, Caráter, Pirâmide)
+# --------------------------------------------------------------------
 with col_esq:
     c1, c2 = st.columns(2)
 
-    # Sexo
+    # ----------------- Sexo -----------------
     with c1:
         st.subheader("Sexo")
         if "sexo" in base_charts.columns:
             df_sexo = agrega_para_grafico(base_charts, ["sexo"], indicador_selecionado)
-            df_sexo["linha"] = "Total"
+
+            if indicador_selecionado in indicadores_percentual:
+                df_sexo["texto"] = df_sexo["valor"].map(lambda v: f"{v:.1f}%")
+            elif indicador_selecionado in indicadores_media:
+                df_sexo["texto"] = df_sexo["valor"].map(lambda v: f"{v:.1f}")
+            else:
+                df_sexo["texto"] = df_sexo["valor"].map(lambda v: f"{v:,.0f}".replace(",", "."))
+
             fig = px.bar(
                 df_sexo,
-                y="linha",
                 x="valor",
-                color="sexo",
+                y="sexo",
                 orientation="h",
-                barmode="stack",
-                text="valor",
+                text="texto",
+                color="sexo",
                 color_discrete_sequence=["#6794DC", "#E86F86"],
             )
-            fig.update_layout(
-                height=120,
-                margin=dict(t=40, b=20),
-                showlegend=True,
-                xaxis_title=label_eixo_x(indicador_selecionado),
-                yaxis_title="",
+
+            if indicador_selecionado in indicadores_percentual:
+                max_val = max(5, float(df_sexo["valor"].max()) * 1.3)
+                fig.update_xaxes(range=[0, max_val], title=label_eixo_x(indicador_selecionado))
+            else:
+                fig.update_xaxes(title=label_eixo_x(indicador_selecionado))
+
+            fig.update_yaxes(title="")
+
+            fig.update_traces(
+                textposition="outside",
+                marker_line_width=0.5,
+                marker_line_color="rgba(0,0,0,0.25)",
             )
-            st.plotly_chart(fig, use_container_width=True)
+
+            fig.update_layout(
+                height=190,
+                margin=dict(t=10, b=20, l=50, r=10),
+                legend_title_text="",
+                legend_orientation="h",
+                legend_y=-0.3,
+                legend_x=0,
+                showlegend=True,
+            )
+
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
         else:
             st.info("Coluna 'sexo' não encontrada.")
 
-    # Caráter do atendimento
+    # ----------------- Caráter do atendimento -----------------
     with c2:
         st.subheader("Caráter do atendimento")
         carater_col = None
@@ -1133,29 +1160,50 @@ with col_esq:
 
         if carater_col:
             df_car = agrega_para_grafico(base_charts, [carater_col], indicador_selecionado)
-            df_car["linha"] = "Total"
+
+            if indicador_selecionado in indicadores_percentual:
+                df_car["texto"] = df_car["valor"].map(lambda v: f"{v:.1f}%")
+            elif indicador_selecionado in indicadores_media:
+                df_car["texto"] = df_car["valor"].map(lambda v: f"{v:.1f}")
+            else:
+                df_car["texto"] = df_car["valor"].map(lambda v: f"{v:,.0f}".replace(",", "."))
+
             fig = px.bar(
                 df_car,
-                y="linha",
                 x="valor",
-                color=carater_col,
+                y=carater_col,
                 orientation="h",
-                barmode="stack",
-                text="valor",
+                text="texto",
+                color=carater_col,
                 color_discrete_sequence=px.colors.qualitative.Set2,
             )
-            fig.update_layout(
-                height=120,
-                margin=dict(t=40, b=40),
-                showlegend=True,
-                xaxis_title=label_eixo_x(indicador_selecionado),
-                yaxis_title="",
+
+            if indicador_selecionado in indicadores_percentual:
+                max_val = max(5, float(df_car["valor"].max()) * 1.3)
+                fig.update_xaxes(range=[0, max_val], title=label_eixo_x(indicador_selecionado))
+            else:
+                fig.update_xaxes(title=label_eixo_x(indicador_selecionado))
+
+            fig.update_yaxes(title="")
+
+            fig.update_traces(
+                textposition="outside",
+                marker_line_width=0.5,
+                marker_line_color="rgba(0,0,0,0.25)",
             )
-            st.plotly_chart(fig, use_container_width=True)
+
+            fig.update_layout(
+                height=190,
+                margin=dict(t=10, b=20, l=50, r=10),
+                legend_title_text="",
+                showlegend=False,
+            )
+
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
         else:
             st.info("Coluna de caráter não encontrada.")
 
-    # Pirâmide Etária
+    # ----------------- Pirâmide Etária -----------------
     st.subheader("Pirâmide Etária")
     if {"faixa_etaria", "sexo"}.issubset(base_charts.columns):
         categorias = [
@@ -1206,7 +1254,6 @@ with col_esq:
             )
             color_index += 1
 
-        # eixo X com valores absolutos (sem sinal negativo)
         max_abs = float(np.nanmax(np.abs(pivot.values))) if pivot.values.size > 0 else 0.0
         if not np.isfinite(max_abs) or max_abs == 0:
             max_abs = 1.0
@@ -1232,6 +1279,9 @@ with col_esq:
     else:
         st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
 
+# --------------------------------------------------------------------
+# COLUNA DO MEIO
+# --------------------------------------------------------------------
 with col_meio:
     # Raça/Cor × Sexo
     st.subheader("Raça/Cor × Sexo")
@@ -1287,6 +1337,9 @@ with col_meio:
             "Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis."
         )
 
+# --------------------------------------------------------------------
+# COLUNA DIREITA
+# --------------------------------------------------------------------
 with col_dir:
     st.subheader(indicador_selecionado)
     if pd.notna(valor_ind):
