@@ -458,7 +458,7 @@ def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def marcar_mort_30d_proc(df: pd.DataFrame) -> pd.DataFrame:
+def marcar_mort_30d_proc(df: pd.DataFrame) -> pdDataFrame:
     if "data_obito" not in df.columns or "codigo_internacao" not in df.columns:
         df["obito_30d_proc"] = False
         return df
@@ -1196,28 +1196,7 @@ with col_esq:
         st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
 
 with col_meio:
-    st.subheader("Estado → Região de Saúde → Município de residência")
-
-    if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base_charts.columns):
-        df_geo_plot = base_charts.dropna(subset=["cidade_moradia"]).copy()
-        df_geo_plot["valor"] = df_geo_plot["peso"]
-
-        fig = px.treemap(
-            df_geo_plot,
-            path=["uf", "regiao_saude", "cidade_moradia"],
-            values="valor",
-        )
-        fig.update_layout(height=550, margin=dict(t=40, l=0, r=0, b=0))
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption(
-            "Hierarquia: Estado → Região de Saúde → Município. Use os filtros para refinar."
-        )
-    else:
-        st.info(
-            "Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis. "
-            "Verifique se o arquivo de Regiões de Saúde está na pasta do app."
-        )
-
+    # Primeiro Raça/Cor × Sexo no topo da coluna
     st.subheader("Raça/Cor × Sexo")
     if {"etnia", "sexo"}.issubset(base_charts.columns):
         df_etnia = (
@@ -1244,6 +1223,33 @@ with col_meio:
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Requer colunas 'etnia' e 'sexo'.")
+
+    st.markdown("---")
+
+    # Depois o treemap, menor e com compressão nas proporções
+    st.subheader("Estado → Região de Saúde → Município de residência")
+
+    if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base_charts.columns):
+        df_geo_plot = base_charts.dropna(subset=["cidade_moradia"]).copy()
+        # valor real (peso) e valor comprimido para visualização
+        df_geo_plot["valor"] = df_geo_plot["peso"].clip(lower=0)
+        df_geo_plot["valor_plot"] = np.sqrt(df_geo_plot["valor"])
+
+        fig = px.treemap(
+            df_geo_plot,
+            path=["uf", "regiao_saude", "cidade_moradia"],
+            values="valor_plot",
+        )
+        fig.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(
+            "Tamanho dos blocos comprimido (raiz quadrada) para evidenciar também estados com menos casos."
+        )
+    else:
+        st.info(
+            "Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis. "
+            "Verifique se o arquivo de Regiões de Saúde está na pasta do app."
+        )
 
 with col_dir:
     st.subheader(indicador_selecionado)
@@ -1352,7 +1358,7 @@ with col_dir:
             st.info("Não encontrei informações de CID no dataset.")
 
 # --------------------------------------------------------------------
-# COMPARATIVO ANUAL (AGORA NO FINAL)
+# COMPARATIVO ANUAL (NO FINAL)
 # --------------------------------------------------------------------
 
 st.divider()
