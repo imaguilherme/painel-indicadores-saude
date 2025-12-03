@@ -847,33 +847,48 @@ def show_active_filters(f):
 
 st.title("Perfil dos Pacientes")
 
-df = None
+# ------------ Upload dos 3 CSVs (apenas na primeira vez) ------------
+if "df" not in st.session_state:
+    df = None
 
-st.subheader("Envie os 3 arquivos CSV")
+    st.subheader("Envie os 3 arquivos CSV")
 
-c1, c2, c3 = st.columns(3)
-evo = c1.file_uploader("CARACTERIZAÇÃO (csv)", type=["csv"], key="evo")
-proc = c2.file_uploader("PROCEDIMENTOS (csv)", type=["csv"], key="proc")
-cti = c3.file_uploader("CIDs/UTI (csv)", type=["csv"], key="cti")
+    c1, c2, c3 = st.columns(3)
+    evo = c1.file_uploader("CARACTERIZAÇÃO (csv)", type=["csv"], key="evo")
+    proc = c2.file_uploader("PROCEDIMENTOS (csv)", type=["csv"], key="proc")
+    cti = c3.file_uploader("CIDs/UTI (csv)", type=["csv"], key="cti")
 
-if evo and proc and cti:
-    tmpdir = tempfile.mkdtemp()
-    p_evo = os.path.join(tmpdir, "evo.csv")
-    p_proc = os.path.join(tmpdir, "proc.csv")
-    p_cti = os.path.join(tmpdir, "cti.csv")
-    open(p_evo, "wb").write(evo.getbuffer())
-    open(p_proc, "wb").write(proc.getbuffer())
-    open(p_cti, "wb").write(cti.getbuffer())
-    con = load_duckdb((p_evo, p_proc, p_cti))
-    df = df_from_duckdb(con, "SELECT * FROM dataset")
-    df = _post_load(df)
+    if evo and proc and cti:
+        tmpdir = tempfile.mkdtemp()
+        p_evo = os.path.join(tmpdir, "evo.csv")
+        p_proc = os.path.join(tmpdir, "proc.csv")
+        p_cti = os.path.join(tmpdir, "cti.csv")
+        open(p_evo, "wb").write(evo.getbuffer())
+        open(p_proc, "wb").write(proc.getbuffer())
+        open(p_cti, "wb").write(cti.getbuffer())
 
-if df is None or df.empty:
-    st.info("Carregue os 3 CSVs para iniciar.")
+        con = load_duckdb((p_evo, p_proc, p_cti))
+        df = df_from_duckdb(con, "SELECT * FROM dataset")
+        df = _post_load(df)
+
+        # enriquece já aqui e guarda pronto na sessão
+        cid_df, sigtap_df, geo_df = load_aux_tables()
+        df = enrich_with_aux_tables(df, cid_df, sigtap_df, geo_df)
+
+        st.session_state["df"] = df
+        st.success("Arquivos carregados com sucesso! Painel inicializado.")
+        st.stop()  # força um rerun sem mostrar novamente os uploaders
+
+    # se ainda não mandou tudo, não tem painel
     st.stop()
 
-cid_df, sigtap_df, geo_df = load_aux_tables()
-df = enrich_with_aux_tables(df, cid_df, sigtap_df, geo_df)
+# ------------ Depois de carregado, não mostra mais os uploaders ------------
+df = st.session_state["df"]
+
+if df is None or df.empty:
+    st.error("Dataset vazio ou não carregado corretamente.")
+    st.stop()
+
 # Filtros
 f = build_filters(df)
 df_f = apply_filters(df, f)
