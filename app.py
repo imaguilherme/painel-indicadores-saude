@@ -14,6 +14,7 @@ st.set_page_config(page_title="Painel de Pacientes", layout="wide")
 # FUNÇÕES DE CARGA E PRÉ-PROCESSAMENTO
 # --------------------------------------------------------------------
 
+
 def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [c.lower() for c in df.columns]
@@ -352,6 +353,7 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_df=None, sigtap_df=None, geo_df
 # FUNÇÕES DE MÉTRICAS / KPI
 # --------------------------------------------------------------------
 
+
 def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
     if {"prontuario_anonimo", "data_internacao"}.issubset(df.columns):
         return (
@@ -678,6 +680,7 @@ def mortalidade_30d_pos_alta(df: pd.DataFrame):
 # AUXILIARES PARA INDICADOR
 # --------------------------------------------------------------------
 
+
 def definir_base_para_indicador(indicador, df_f, df_pac):
     if indicador == "Quantidade de pacientes":
         return df_pac.copy()
@@ -724,6 +727,7 @@ def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFra
 # --------------------------------------------------------------------
 # FILTROS
 # --------------------------------------------------------------------
+
 
 def build_filters(df: pd.DataFrame):
     if df is None:
@@ -849,7 +853,7 @@ st.title("Perfil dos Pacientes")
 
 # ------------ Upload dos 3 CSVs (apenas na primeira vez) ------------
 if "df" not in st.session_state:
-    df = None
+    df_tmp = None
 
     st.subheader("Envie os 3 arquivos CSV")
 
@@ -868,14 +872,14 @@ if "df" not in st.session_state:
         open(p_cti, "wb").write(cti.getbuffer())
 
         con = load_duckdb((p_evo, p_proc, p_cti))
-        df = df_from_duckdb(con, "SELECT * FROM dataset")
-        df = _post_load(df)
+        df_tmp = df_from_duckdb(con, "SELECT * FROM dataset")
+        df_tmp = _post_load(df_tmp)
 
         # enriquece já aqui e guarda pronto na sessão
         cid_df, sigtap_df, geo_df = load_aux_tables()
-        df = enrich_with_aux_tables(df, cid_df, sigtap_df, geo_df)
+        df_tmp = enrich_with_aux_tables(df_tmp, cid_df, sigtap_df, geo_df)
 
-        st.session_state["df"] = df
+        st.session_state["df"] = df_tmp
         st.success("Arquivos carregados com sucesso! Painel inicializado.")
         st.stop()  # força um rerun sem mostrar novamente os uploaders
 
