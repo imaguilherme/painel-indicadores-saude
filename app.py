@@ -14,6 +14,7 @@ st.set_page_config(page_title="Painel de Pacientes", layout="wide")
 # FUNÇÕES DE CARGA E PRÉ-PROCESSAMENTO
 # --------------------------------------------------------------------
 
+
 def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [c.lower() for c in df.columns]
@@ -59,8 +60,8 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     if "idade" in df.columns:
         bins = [
             -1,
-            0,   # < 1 ano
-            8,   # 01 a 08 anos
+            0,  # < 1 ano
+            8,  # 01 a 08 anos
             17,  # 09 a 17 anos
             26,  # 18 a 26 anos
             35,  # 27 a 35 anos
@@ -70,8 +71,9 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
             71,  # 63 a 71 anos
             80,  # 72 a 80 anos
             89,  # 81 a 89 anos
-            200, # 90+ 
+            200,  # 90 anos ou mais
         ]
+
         labels = [
             "< 1 ano",
             "01 a 08 anos",
@@ -104,6 +106,7 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
         df = df.drop_duplicates(subset=keys)
 
     return df
+
 
 @st.cache_resource(show_spinner=False)
 def load_duckdb(csv_paths):
@@ -174,22 +177,49 @@ def load_duckdb(csv_paths):
     )
     return con
 
+
 def df_from_duckdb(con, sql: str) -> pd.DataFrame:
     return con.execute(sql).df()
+
 
 # --------------------------------------------------------------------
 # ENRIQUECIMENTO OPCIONAL (CID, SIGTAP, GEO)
 # --------------------------------------------------------------------
 
-def enrich_with_aux_tables(df: pd.DataFrame, cid_file=None, sigtap_file=None, geo_file=None) -> pd.DataFrame:
+
+@st.cache_data
+def load_aux_tables():
+    """
+    Carrega as tabelas auxiliares de CID-10, SIGTAP e Regiões de Saúde
+    a partir de arquivos CSV que já vêm junto com o app.
+    """
+    try:
+        cid_df = pd.read_csv("LIST_CID_2019_2021_BINDED.csv", dtype=str)
+    except FileNotFoundError:
+        cid_df = None
+
+    try:
+        sigtap_df = pd.read_csv("Matriz de Dados do SIGTAP.csv", dtype=str)
+    except FileNotFoundError:
+        sigtap_df = None
+
+    try:
+        geo_df = pd.read_csv("UF_Macro_Região_Município.csv", dtype=str)
+    except FileNotFoundError:
+        geo_df = None
+
+    return cid_df, sigtap_df, geo_df
+
+
+def enrich_with_aux_tables(df: pd.DataFrame, cid_df=None, sigtap_df=None, geo_df=None) -> pd.DataFrame:
     if df is None:
         return df
     df_enriched = df.copy()
 
     # CID-10
-    if cid_file is not None:
+    if cid_df is not None:
         try:
-            cid_df = pd.read_csv(cid_file, dtype=str)
+            cid_df = cid_df.copy()
             cid_df.columns = [c.lower() for c in cid_df.columns]
             cid_code_col = next((c for c in cid_df.columns if "cid" in c), None)
 
@@ -233,9 +263,9 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_file=None, sigtap_file=None, ge
             st.warning(f"Não foi possível enriquecer com CID-10: {e}")
 
     # SIGTAP
-    if sigtap_file is not None:
+    if sigtap_df is not None:
         try:
-            sig_df = pd.read_csv(sigtap_file, dtype=str)
+            sig_df = sigtap_df.copy()
             sig_df.columns = [c.lower() for c in sig_df.columns]
             sig_code_col = next(
                 (c for c in sig_df.columns if "proced" in c and ("cod" in c or "codigo" in c)),
@@ -267,9 +297,9 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_file=None, sigtap_file=None, ge
             st.warning(f"Não foi possível enriquecer com SIGTAP: {e}")
 
     # GEO
-    if geo_file is not None:
+    if geo_df is not None:
         try:
-            geo_df = pd.read_csv(geo_file, dtype=str)
+            geo_df = geo_df.copy()
             geo_df.columns = [c.lower() for c in geo_df.columns]
             if "cidade_moradia" in df_enriched.columns and {"no_municipio", "sg_uf"}.issubset(geo_df.columns):
                 partes = df_enriched["cidade_moradia"].astype(str).str.split(",", n=1, expand=True)
@@ -310,9 +340,11 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_file=None, sigtap_file=None, ge
 
     return df_enriched
 
+
 # --------------------------------------------------------------------
 # FUNÇÕES DE MÉTRICAS / KPI
 # --------------------------------------------------------------------
+
 
 def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
     if {"prontuario_anonimo", "data_internacao"}.issubset(df.columns):
@@ -324,6 +356,7 @@ def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
     if "prontuario_anonimo" in df.columns:
         return df.drop_duplicates(subset=["prontuario_anonimo"])
     return df
+
 
 def marcar_obito_periodo(df: pd.DataFrame) -> pd.DataFrame:
     if {"data_internacao", "data_alta"}.issubset(df.columns):
@@ -349,6 +382,7 @@ def marcar_obito_periodo(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["obito_no_periodo"] = False
     return df
+
 
 def marcar_uti_flag(df: pd.DataFrame) -> pd.DataFrame:
     if "codigo_internacao" not in df.columns:
@@ -378,6 +412,7 @@ def marcar_uti_flag(df: pd.DataFrame) -> pd.DataFrame:
     df = df.merge(aux, on="codigo_internacao", how="left")
     df["uti_flag"] = df["uti_flag"].fillna(False)
     return df
+
 
 def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
     """Marca reinternações em até 30 dias a partir do procedimento e da alta."""
@@ -415,6 +450,7 @@ def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
     df["reint_30d_alta"] = df["reint_30d_alta"].fillna(False)
     return df
 
+
 def marcar_mort_30d_proc(df: pd.DataFrame) -> pd.DataFrame:
     if "data_obito" not in df.columns or "codigo_internacao" not in df.columns:
         df["obito_30d_proc"] = False
@@ -446,6 +482,7 @@ def marcar_mort_30d_proc(df: pd.DataFrame) -> pd.DataFrame:
     df["obito_30d_proc"] = df["obito_30d_proc"].fillna(False)
     return df
 
+
 def marcar_mort_30d_alta(df: pd.DataFrame) -> pd.DataFrame:
     if not {"data_alta", "data_obito", "codigo_internacao"}.issubset(df.columns):
         df["obito_30d_alta"] = False
@@ -464,6 +501,7 @@ def marcar_mort_30d_alta(df: pd.DataFrame) -> pd.DataFrame:
     df = df.merge(aux, on="codigo_internacao", how="left")
     df["obito_30d_alta"] = df["obito_30d_alta"].fillna(False)
     return df
+
 
 def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
     pacientes = (
@@ -512,6 +550,7 @@ def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
 
     return pacientes, internacoes, tmi, mort_hosp
 
+
 def reinternacao_30d_pos_proced(df: pd.DataFrame):
     ok = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}.issubset(
         df.columns
@@ -529,6 +568,7 @@ def reinternacao_30d_pos_proced(df: pd.DataFrame):
     ]["codigo_internacao"].nunique()
     return (numer / base * 100) if base else np.nan
 
+
 def reinternacao_30d_pos_alta(df: pd.DataFrame):
     ok = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}.issubset(
         df.columns
@@ -544,6 +584,7 @@ def reinternacao_30d_pos_alta(df: pd.DataFrame):
         s["delta"].between(0, 30, inclusive="both") & (~s["transfer"])
     ]["codigo_internacao"].nunique()
     return (numer / base * 100) if base else np.nan
+
 
 def internacao_uti_pct(df: pd.DataFrame):
     if "codigo_internacao" not in df.columns:
@@ -569,6 +610,7 @@ def internacao_uti_pct(df: pd.DataFrame):
     numer = e.loc[e["uti_flag"], "codigo_internacao"].nunique()
     return (numer / denom * 100) if denom else np.nan
 
+
 def tempo_medio_uti_dias(df: pd.DataFrame):
     if not {"dt_entrada_cti", "dt_saida_cti"}.issubset(df.columns):
         return np.nan
@@ -576,6 +618,7 @@ def tempo_medio_uti_dias(df: pd.DataFrame):
     dias_uti = (e["dt_saida_cti"] - e["dt_entrada_cti"]).dt.days
     dias_uti = dias_uti.replace([np.inf, -np.inf], np.nan).dropna()
     return dias_uti.mean() if len(dias_uti) else np.nan
+
 
 def mortalidade_30d_pos_proced(df: pd.DataFrame):
     if "data_obito" not in df.columns or "codigo_internacao" not in df.columns:
@@ -606,6 +649,7 @@ def mortalidade_30d_pos_proced(df: pd.DataFrame):
     numer = e.loc[e["obito_30d_proc"], "codigo_internacao"].nunique()
     return (numer / denom * 100) if denom else np.nan
 
+
 def mortalidade_30d_pos_alta(df: pd.DataFrame):
     if not {"data_alta", "data_obito", "codigo_internacao"}.issubset(df.columns):
         return np.nan
@@ -623,14 +667,17 @@ def mortalidade_30d_pos_alta(df: pd.DataFrame):
     numer = e.loc[e["obito_30d_alta"], "codigo_internacao"].nunique()
     return (numer / denom * 100) if denom else np.nan
 
+
 # --------------------------------------------------------------------
 # AUXILIARES PARA INDICADOR
 # --------------------------------------------------------------------
+
 
 def definir_base_para_indicador(indicador, df_f, df_pac):
     if indicador == "Quantidade de pacientes":
         return df_pac.copy()
     return df_f.copy()
+
 
 def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFrame:
     df = df.copy()
@@ -668,9 +715,11 @@ def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFra
 
     return df
 
+
 # --------------------------------------------------------------------
 # FILTROS
 # --------------------------------------------------------------------
+
 
 def build_filters(df: pd.DataFrame):
     if df is None:
@@ -735,6 +784,7 @@ def build_filters(df: pd.DataFrame):
         "sexo": sexo_sel,
     }
 
+
 def apply_filters(df: pd.DataFrame, f):
     if "ano_internacao" in df.columns and f["ano"]:
         df = df[df["ano_internacao"].isin(f["ano"])]
@@ -766,6 +816,7 @@ def apply_filters(df: pd.DataFrame, f):
 
     return df
 
+
 def show_active_filters(f):
     partes = []
     if f["ano"]:
@@ -785,9 +836,11 @@ def show_active_filters(f):
     else:
         st.markdown("**Filtros ativos:** nenhum filtro aplicado.")
 
+
 # --------------------------------------------------------------------
 # INTERFACE PRINCIPAL
 # --------------------------------------------------------------------
+
 
 st.title("Perfil dos Pacientes")
 
@@ -816,50 +869,9 @@ if df is None or df.empty:
     st.info("Carregue os 3 CSVs para iniciar.")
     st.stop()
 
-# --------------------------------------------------------------------
-# CARREGAR TABELAS AUXILIARES AUTOMATICAMENTE
-# --------------------------------------------------------------------
-
-app_dir = os.path.dirname(os.path.abspath(__file__))
-
-def _find_first_existing(filenames):
-    for fname in filenames:
-        path = os.path.join(app_dir, fname)
-        if os.path.exists(path):
-            return path
-    return None
-
-cid_path = _find_first_existing([
-    "LIST_CID_2019_2021_BINDED.csv",
-    "Lista de códigos dos CIDs e classificação em subcategoria, capítulo e grupos - LIST_CID_2019_2021_BINDED.csv",
-])
-
-sigtap_path = _find_first_existing([
-    "Matriz de Dados do SIGTAP.csv",
-    "Lista de códigos dos procedimentos e classificação em grupos.xlsx - Matriz de Dados do SIGTAP.csv",
-])
-
-geo_path = _find_first_existing([
-    "UF_Macro_Região_Município.csv",
-    "Regiões e Macrorregiões de Saúde.xlsx - UF_Macro_Região_Município.csv",
-])
-
-# Enriquecer automaticamente com as tabelas encontradas
-df = enrich_with_aux_tables(df, cid_file=cid_path, sigtap_file=sigtap_path, geo_file=geo_path)
-
-with st.expander("Tabelas auxiliares – CID-10, SIGTAP e Regiões de Saúde (carregadas automaticamente)"):
-    if cid_path:
-        st.success(f"CID-10: arquivo encontrado ({os.path.basename(cid_path)})")
-    else:
-        st.warning("CID-10: arquivo não encontrado na pasta do app.")
-    if sigtap_path:
-        st.success(f"SIGTAP: arquivo encontrado ({os.path.basename(sigtap_path)})")
-    else:
-        st.warning("SIGTAP: arquivo não encontrado na pasta do app.")
-    if geo_path:
-        st.success(f"UF/Macro/Região/Município: arquivo encontrado ({os.path.basename(geo_path)})")
-    else:
-        st.warning("UF/Macro/Região/Município: arquivo não encontrado na pasta do app.")
+# Carrega automaticamente as tabelas auxiliares de CID-10, SIGTAP e Regiões de Saúde
+cid_df, sigtap_df, geo_df = load_aux_tables()
+df = enrich_with_aux_tables(df, cid_df, sigtap_df, geo_df)
 
 # Filtros
 f = build_filters(df)
@@ -934,6 +946,7 @@ indicador_selecionado = st.radio(
     horizontal=True,
 )
 
+
 def calcular_indicador(nome):
     if nome == "Quantidade de pacientes":
         return pacientes
@@ -958,6 +971,7 @@ def calcular_indicador(nome):
     if nome == "Mortalidade em até 30 dias da alta (%)":
         return mort_30_alta
     return np.nan
+
 
 def calcular_indicador_ano(nome, df_eventos_ano: pd.DataFrame, df_pacientes_ano: pd.DataFrame):
     pac_ano, int_ano, tmi_ano, mort_hosp_ano = kpis(df_eventos_ano, df_pacientes_ano)
@@ -992,6 +1006,7 @@ def calcular_indicador_ano(nome, df_eventos_ano: pd.DataFrame, df_pacientes_ano:
     if nome == "Mortalidade em até 30 dias da alta (%)":
         return mort_30_alta_ano
     return np.nan
+
 
 valor_ind = calcular_indicador(indicador_selecionado)
 if "%" in indicador_selecionado:
