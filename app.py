@@ -874,13 +874,11 @@ if "df" not in st.session_state:
         st.session_state["df"] = df_tmp
         st.success("Arquivos carregados com sucesso! Painel inicializado.")
 
-        # força recarregar a página indo para o painel
         try:
             st.rerun()
         except Exception:
             st.experimental_rerun()
 
-    # ainda não subiu tudo → para aqui
     st.stop()
 
 # ------------ Depois de carregado, não mostra mais os uploaders ------------
@@ -954,6 +952,54 @@ indicadores_icardio = [
     "Mortalidade em até 30 dias do procedimento (%)",
     "Mortalidade em até 30 dias da alta (%)",
 ]
+
+# tipos de indicador
+indicadores_quantidade = [
+    "Quantidade de pacientes",
+    "Quantidade de internações",
+    "Quantidade de procedimentos",
+]
+
+indicadores_media = [
+    "Tempo médio de internação (dias)",
+    "Tempo médio de internação em UTI (dias)",
+]
+
+indicadores_percentual = [
+    "Internação em UTI (%)",
+    "Reinternação em até 30 dias do procedimento (%)",
+    "Reinternação em até 30 dias da alta (%)",
+    "Mortalidade hospitalar (%)",
+    "Mortalidade em até 30 dias do procedimento (%)",
+    "Mortalidade em até 30 dias da alta (%)",
+]
+
+
+def agrega_para_grafico(df, group_cols, indicador):
+    """
+    Usa a coluna 'peso':
+    - Quantidade  -> soma
+    - Tempo médio -> média
+    - Percentual  -> média*100
+    """
+    g = df.groupby(group_cols, dropna=False)["peso"]
+
+    if indicador in indicadores_percentual:
+        out = g.mean().mul(100.0).reset_index(name="valor")
+    elif indicador in indicadores_media:
+        out = g.mean().reset_index(name="valor")
+    else:
+        out = g.sum().reset_index(name="valor")
+    return out
+
+
+def label_eixo_x(indicador):
+    if indicador in indicadores_percentual:
+        return "Taxa (%)"
+    if indicador in indicadores_media:
+        return "Média (dias)"
+    return "Quantidade"
+
 
 st.markdown("### Indicadores disponíveis")
 
@@ -1049,15 +1095,11 @@ col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
 with col_esq:
     c1, c2 = st.columns(2)
 
+    # Sexo
     with c1:
         st.subheader("Sexo")
         if "sexo" in base_charts.columns:
-            df_sexo = (
-                base_charts.groupby("sexo", dropna=False)["peso"]
-                .sum()
-                .reset_index()
-                .rename(columns={"peso": "valor"})
-            )
+            df_sexo = agrega_para_grafico(base_charts, ["sexo"], indicador_selecionado)
             df_sexo["linha"] = "Total"
             fig = px.bar(
                 df_sexo,
@@ -1073,13 +1115,14 @@ with col_esq:
                 height=120,
                 margin=dict(t=40, b=20),
                 showlegend=True,
-                xaxis_title="Quantidade",
+                xaxis_title=label_eixo_x(indicador_selecionado),
                 yaxis_title="",
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Coluna 'sexo' não encontrada.")
 
+    # Caráter do atendimento
     with c2:
         st.subheader("Caráter do atendimento")
         carater_col = None
@@ -1089,12 +1132,7 @@ with col_esq:
                 break
 
         if carater_col:
-            df_car = (
-                base_charts.groupby(carater_col, dropna=False)["peso"]
-                .sum()
-                .reset_index()
-                .rename(columns={"peso": "valor"})
-            )
+            df_car = agrega_para_grafico(base_charts, [carater_col], indicador_selecionado)
             df_car["linha"] = "Total"
             fig = px.bar(
                 df_car,
@@ -1110,13 +1148,14 @@ with col_esq:
                 height=120,
                 margin=dict(t=40, b=40),
                 showlegend=True,
-                xaxis_title="Quantidade",
+                xaxis_title=label_eixo_x(indicador_selecionado),
                 yaxis_title="",
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Coluna de caráter não encontrada.")
 
+    # Pirâmide Etária
     st.subheader("Pirâmide Etária")
     if {"faixa_etaria", "sexo"}.issubset(base_charts.columns):
         categorias = [
@@ -1138,11 +1177,9 @@ with col_esq:
         df_pira["sexo"] = df_pira["sexo"].astype(str).str.strip().str.title()
         df_pira = df_pira[df_pira["faixa_etaria"].isin(categorias)]
 
-        tabela = (
-            df_pira.groupby(["faixa_etaria", "sexo"], dropna=False)["peso"]
-            .sum()
-            .reset_index(name="n")
-        )
+        tabela = agrega_para_grafico(
+            df_pira, ["faixa_etaria", "sexo"], indicador_selecionado
+        ).rename(columns={"valor": "n"})
 
         pivot = tabela.pivot(index="faixa_etaria", columns="sexo", values="n").fillna(0)
         pivot = pivot.reindex(categorias)
@@ -1164,7 +1201,7 @@ with col_esq:
                 name=str(sexo_cat),
                 orientation="h",
                 marker_color=palette[color_index % len(palette)],
-                text=values.astype(int),
+                text=np.round(values, 2),
                 textposition="outside",
             )
             color_index += 1
@@ -1173,7 +1210,7 @@ with col_esq:
             barmode="overlay",
             height=550,
             xaxis=dict(
-                title="Quantidade (conforme indicador)",
+                title=label_eixo_x(indicador_selecionado),
                 showgrid=False,
             ),
             yaxis=dict(title="Faixa etária", autorange="reversed"),
@@ -1186,12 +1223,11 @@ with col_esq:
         st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
 
 with col_meio:
+    # Raça/Cor × Sexo
     st.subheader("Raça/Cor × Sexo")
     if {"etnia", "sexo"}.issubset(base_charts.columns):
-        df_etnia = (
-            base_charts.groupby(["etnia", "sexo"], dropna=False)["peso"]
-            .sum()
-            .reset_index(name="valor")
+        df_etnia = agrega_para_grafico(
+            base_charts, ["etnia", "sexo"], indicador_selecionado
         )
         fig = px.bar(
             df_etnia,
@@ -1200,11 +1236,11 @@ with col_meio:
             color="sexo",
             barmode="group",
             orientation="h",
-            text_auto=True,
+            text="valor",
             color_discrete_sequence=["#6794DC", "#E86F86"],
         )
         fig.update_layout(
-            xaxis_title="Quantidade",
+            xaxis_title=label_eixo_x(indicador_selecionado),
             yaxis_title="Raça/Cor",
             height=320,
             margin=dict(t=40, b=40),
@@ -1215,11 +1251,15 @@ with col_meio:
 
     st.markdown("---")
 
+    # Treemap
     st.subheader("Estado → Região de Saúde → Município de residência")
 
     if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base_charts.columns):
-        df_geo_plot = base_charts.dropna(subset=["cidade_moradia"]).copy()
-        df_geo_plot["valor"] = df_geo_plot["peso"].clip(lower=0)
+        df_geo_raw = base_charts.dropna(subset=["cidade_moradia"]).copy()
+        df_geo_plot = agrega_para_grafico(
+            df_geo_raw, ["uf", "regiao_saude", "cidade_moradia"], indicador_selecionado
+        )
+        df_geo_plot["valor"] = df_geo_plot["valor"].clip(lower=0)
         df_geo_plot["valor_plot"] = np.sqrt(df_geo_plot["valor"])
 
         fig = px.treemap(
@@ -1230,7 +1270,7 @@ with col_meio:
         fig.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
         st.plotly_chart(fig, use_container_width=True)
         st.caption(
-            "Tamanho dos blocos comprimido (raiz quadrada) para evidenciar também estados com menos casos."
+            "Tamanho dos blocos comprimido (raiz quadrada) para evidenciar também grupos menores."
         )
     else:
         st.info(
@@ -1250,6 +1290,7 @@ with col_dir:
 
     st.markdown("---")
 
+    # Procedimentos
     st.subheader("Procedimentos (amostra)")
     proc_cols = [
         c
@@ -1258,23 +1299,18 @@ with col_dir:
     ]
     if proc_cols:
         pcol = proc_cols[0]
-        top_proc = (
-            base_charts.groupby(pcol, dropna=False)["peso"]
-            .sum()
-            .reset_index()
-            .rename(columns={"peso": "valor"})
-        )
+        top_proc = agrega_para_grafico(base_charts, [pcol], indicador_selecionado)
         top_proc = top_proc.sort_values("valor", ascending=True).tail(10)
         fig = px.bar(
             top_proc,
             y=pcol,
             x="valor",
             orientation="h",
-            text_auto=True,
+            text="valor",
             color_discrete_sequence=["#4C72B0"],
         )
         fig.update_layout(
-            xaxis_title="Quantidade",
+            xaxis_title=label_eixo_x(indicador_selecionado),
             yaxis_title="",
             height=260,
             margin=dict(t=40, b=40),
@@ -1285,14 +1321,12 @@ with col_dir:
 
     st.markdown("---")
 
+    # CID
     st.subheader("CID (capítulo / grupo) – amostra")
 
     if "cid_grupo" in base_charts.columns and base_charts["cid_grupo"].notna().any():
-        top_cid_grp = (
-            base_charts.groupby("cid_grupo", dropna=False)["peso"]
-            .sum()
-            .reset_index()
-            .rename(columns={"peso": "valor"})
+        top_cid_grp = agrega_para_grafico(
+            base_charts, ["cid_grupo"], indicador_selecionado
         )
         top_cid_grp = top_cid_grp.sort_values("valor", ascending=True).tail(10)
         fig = px.bar(
@@ -1300,11 +1334,11 @@ with col_dir:
             y="cid_grupo",
             x="valor",
             orientation="h",
-            text_auto=True,
+            text="valor",
             color_discrete_sequence=["#55A868"],
         )
         fig.update_layout(
-            xaxis_title="Quantidade",
+            xaxis_title=label_eixo_x(indicador_selecionado),
             yaxis_title="",
             height=260,
             margin=dict(t=40, b=40),
@@ -1321,12 +1355,7 @@ with col_dir:
 
         if cid_candidates:
             col_cid = cid_candidates[0]
-            top = (
-                base_charts.groupby(col_cid, dropna=False)["peso"]
-                .sum()
-                .reset_index()
-                .rename(columns={"peso": "valor"})
-            )
+            top = agrega_para_grafico(base_charts, [col_cid], indicador_selecionado)
             top[col_cid] = top[col_cid].astype(str).str.upper().str[:60]
             top = top.sort_values("valor", ascending=True).tail(10)
             fig = px.bar(
@@ -1334,11 +1363,11 @@ with col_dir:
                 y=col_cid,
                 x="valor",
                 orientation="h",
-                text_auto=True,
+                text="valor",
                 color_discrete_sequence=["#55A868"],
             )
             fig.update_layout(
-                xaxis_title="Quantidade",
+                xaxis_title=label_eixo_x(indicador_selecionado),
                 yaxis_title="",
                 height=260,
                 margin=dict(t=40, b=40),
