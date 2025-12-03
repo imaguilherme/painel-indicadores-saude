@@ -216,7 +216,6 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_df=None, sigtap_df=None, geo_df
       - Capítulo / grupo CID-10 (tabela listacids.csv)
       - Grupos de procedimento SIGTAP (tabela listaprocedimentos.csv)
       - UF / Macrorregião / Região de Saúde (tabela regioesdesaude.csv)
-    Os parâmetros cid_df, sigtap_df e geo_df devem ser dataframes já carregados.
     """
     if df is None:
         return df
@@ -1034,57 +1033,9 @@ if "%" in indicador_selecionado:
 else:
     texto_valor = f"{valor_ind:,.2f}".replace(",", ".") if pd.notna(valor_ind) else "—"
 
-st.divider()
-
-# Comparativo anual
-st.markdown("### Comparativo anual do indicador selecionado")
-
-ano_col = (
-    "ano_internacao"
-    if "ano_internacao" in df_f.columns
-    else ("ano" if "ano" in df_f.columns else None)
-)
-
-if ano_col:
-    df_valid = df_f[~df_f[ano_col].isna()].copy()
-    if not df_valid.empty:
-        anos_validos = sorted(df_valid[ano_col].dropna().unique())
-        linhas = []
-        for a in anos_validos:
-            df_ano = df_valid[df_valid[ano_col] == a]
-            df_pac_ano = pacientes_unicos(df_ano)
-            val_ano = calcular_indicador_ano(indicador_selecionado, df_ano, df_pac_ano)
-            linhas.append({ano_col: int(a), "valor": val_ano})
-
-        df_plot = pd.DataFrame(linhas).dropna(subset=["valor"]).sort_values(ano_col)
-
-        if not df_plot.empty:
-            fig_ano = px.bar(df_plot, x=ano_col, y="valor")
-            if "%" in indicador_selecionado:
-                fig_ano.update_traces(
-                    texttemplate="%{y:.2f}%",
-                    textposition="outside",
-                )
-                fig_ano.update_yaxes(tickformat=".2f")
-            else:
-                fig_ano.update_traces(
-                    texttemplate="%{y}",
-                    textposition="outside",
-                )
-
-            fig_ano.update_layout(
-                xaxis_title="Ano",
-                yaxis_title=indicador_selecionado,
-                height=280,
-                margin=dict(t=40, b=40),
-            )
-            st.plotly_chart(fig_ano, use_container_width=True)
-        else:
-            st.info("Sem valores para o comparativo anual com o indicador selecionado.")
-    else:
-        st.info("Sem dados para o comparativo anual com os filtros atuais.")
-else:
-    st.info("Coluna de ano não encontrada no dataset.")
+# --------------------------------------------------------------------
+# BASE PARA GRÁFICOS E GRID PRINCIPAL
+# --------------------------------------------------------------------
 
 st.divider()
 
@@ -1399,3 +1350,57 @@ with col_dir:
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Não encontrei informações de CID no dataset.")
+
+# --------------------------------------------------------------------
+# COMPARATIVO ANUAL (AGORA NO FINAL)
+# --------------------------------------------------------------------
+
+st.divider()
+st.markdown("### Comparativo anual do indicador selecionado")
+
+ano_col = (
+    "ano_internacao"
+    if "ano_internacao" in df_f.columns
+    else ("ano" if "ano" in df_f.columns else None)
+)
+
+if ano_col:
+    df_valid = df_f[~df_f[ano_col].isna()].copy()
+    if not df_valid.empty:
+        anos_validos = sorted(df_valid[ano_col].dropna().unique())
+        linhas = []
+        for a in anos_validos:
+            df_ano = df_valid[df_valid[ano_col] == a]
+            df_pac_ano = pacientes_unicos(df_ano)
+            val_ano = calcular_indicador_ano(indicador_selecionado, df_ano, df_pac_ano)
+            linhas.append({ano_col: int(a), "valor": val_ano})
+
+        df_plot = pd.DataFrame(linhas).dropna(subset=["valor"]).sort_values(ano_col)
+
+        if not df_plot.empty:
+            fig_ano = px.bar(df_plot, x=ano_col, y="valor")
+            if "%" in indicador_selecionado:
+                fig_ano.update_traces(
+                    texttemplate="%{y:.2f}%",
+                    textposition="outside",
+                )
+                fig_ano.update_yaxes(tickformat=".2f")
+            else:
+                fig_ano.update_traces(
+                    texttemplate="%{y}",
+                    textposition="outside",
+                )
+
+            fig_ano.update_layout(
+                xaxis_title="Ano",
+                yaxis_title=indicador_selecionado,
+                height=280,
+                margin=dict(t=40, b=40),
+            )
+            st.plotly_chart(fig_ano, use_container_width=True)
+        else:
+            st.info("Sem valores para o comparativo anual com o indicador selecionado.")
+    else:
+        st.info("Sem dados para o comparativo anual com os filtros atuais.")
+else:
+    st.info("Coluna de ano não encontrada no dataset.")
