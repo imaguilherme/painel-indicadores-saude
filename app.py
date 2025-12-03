@@ -8,7 +8,7 @@ import duckdb
 import os
 import tempfile
 
-st.set_page_config(page_title="Painel de Pacientes", layout="wide")
+st.set_page_config(page_title="Perfil dos Pacientes", layout="wide")
 
 # --------------------------------------------------------------------
 # FUNÇÕES DE CARGA E PRÉ-PROCESSAMENTO
@@ -187,10 +187,6 @@ def load_aux_tables():
     """
     Carrega as tabelas auxiliares de CID-10, SIGTAP e Regiões de Saúde
     a partir de arquivos CSV que já vêm junto com o app.
-    Os nomes esperados são:
-      - listacids.csv
-      - listaprocedimentos.csv
-      - regioesdesaude.csv
     """
     try:
         cid_df = pd.read_csv("listacids.csv", dtype=str)
@@ -213,9 +209,9 @@ def load_aux_tables():
 def enrich_with_aux_tables(df: pd.DataFrame, cid_df=None, sigtap_df=None, geo_df=None) -> pd.DataFrame:
     """
     Enriquecer o dataframe principal com:
-      - Capítulo / grupo CID-10 (tabela listacids.csv)
-      - Grupos de procedimento SIGTAP (tabela listaprocedimentos.csv)
-      - UF / Macrorregião / Região de Saúde (tabela regioesdesaude.csv)
+      - Capítulo / grupo CID-10
+      - Grupos de procedimento SIGTAP
+      - UF / Macrorregião / Região de Saúde
     """
     if df is None:
         return df
@@ -229,7 +225,6 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_df=None, sigtap_df=None, geo_df
             cid_code_col = next((c for c in cid_df.columns if "cid" in c), None)
 
             if cid_code_col and ("cid" in df_enriched.columns or "cids" in df_enriched.columns):
-                # se não houver coluna 'cid' mas houver 'cids' com lista, pega o primeiro da lista
                 if "cid" not in df_enriched.columns and "cids" in df_enriched.columns:
                     df_enriched["cid"] = (
                         df_enriched["cids"]
@@ -256,7 +251,6 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_df=None, sigtap_df=None, geo_df
                 cid_small = cid_df[keep_cols].drop_duplicates(subset=["cid3"])
                 df_enriched = df_enriched.merge(cid_small, how="left", on="cid3")
 
-                # renomeia colunas padronizando
                 rename_cols = {}
                 for c in df_enriched.columns:
                     cl = c.lower()
@@ -422,7 +416,7 @@ def marcar_uti_flag(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
-    """Marca reinternações em até 30 dias a partir do procedimento e da alta."""
+    """Marca reinternações em até 30 dias."""
     df = df.copy()
     required = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}
     if not required.issubset(df.columns):
@@ -874,15 +868,19 @@ if "df" not in st.session_state:
         df_tmp = df_from_duckdb(con, "SELECT * FROM dataset")
         df_tmp = _post_load(df_tmp)
 
-        # enriquece já aqui e guarda pronto na sessão
         cid_df, sigtap_df, geo_df = load_aux_tables()
         df_tmp = enrich_with_aux_tables(df_tmp, cid_df, sigtap_df, geo_df)
 
         st.session_state["df"] = df_tmp
         st.success("Arquivos carregados com sucesso! Painel inicializado.")
-        st.stop()  # força um rerun sem mostrar novamente os uploaders
 
-    # se ainda não mandou tudo, não tem painel
+        # força recarregar a página indo para o painel
+        try:
+            st.rerun()
+        except Exception:
+            st.experimental_rerun()
+
+    # ainda não subiu tudo → para aqui
     st.stop()
 
 # ------------ Depois de carregado, não mostra mais os uploaders ------------
@@ -900,9 +898,9 @@ df_pac = pacientes_unicos(df_f)
 show_active_filters(f)
 st.divider()
 
-modo_perfil = True  # sempre contar paciente único quando indicador for "Quantidade de pacientes"
+modo_perfil = True
 
-# KPIs globais (para cálculo de indicadores)
+# KPIs globais
 pacientes, internacoes, tmi, mort_hosp = kpis(df_f, df_pac)
 ri_proc = reinternacao_30d_pos_proced(df_f)
 ri_alta = reinternacao_30d_pos_alta(df_f)
@@ -1039,7 +1037,6 @@ else:
 
 st.divider()
 
-# Base para os gráficos
 if indicador_selecionado == "Quantidade de pacientes" and modo_perfil:
     base_charts = df_pac.copy()
 else:
@@ -1047,13 +1044,11 @@ else:
 
 base_charts = adicionar_peso_por_indicador(base_charts, indicador_selecionado)
 
-# GRID PRINCIPAL
 col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
 
 with col_esq:
     c1, c2 = st.columns(2)
 
-    # Sexo (stacked bar horizontal, uma linha)
     with c1:
         st.subheader("Sexo")
         if "sexo" in base_charts.columns:
@@ -1085,7 +1080,6 @@ with col_esq:
         else:
             st.info("Coluna 'sexo' não encontrada.")
 
-    # Caráter do atendimento
     with c2:
         st.subheader("Caráter do atendimento")
         carater_col = None
@@ -1123,7 +1117,6 @@ with col_esq:
         else:
             st.info("Coluna de caráter não encontrada.")
 
-    # Pirâmide Etária
     st.subheader("Pirâmide Etária")
     if {"faixa_etaria", "sexo"}.issubset(base_charts.columns):
         categorias = [
@@ -1163,10 +1156,7 @@ with col_esq:
 
         for sexo_cat in pivot.columns:
             values = pivot[sexo_cat]
-            if color_index == 0:
-                x_vals = -values
-            else:
-                x_vals = values
+            x_vals = -values if color_index == 0 else values
 
             fig.add_bar(
                 y=pivot.index,
@@ -1196,7 +1186,6 @@ with col_esq:
         st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
 
 with col_meio:
-    # Primeiro Raça/Cor × Sexo no topo da coluna
     st.subheader("Raça/Cor × Sexo")
     if {"etnia", "sexo"}.issubset(base_charts.columns):
         df_etnia = (
@@ -1226,12 +1215,10 @@ with col_meio:
 
     st.markdown("---")
 
-    # Depois o treemap, menor e com compressão nas proporções
     st.subheader("Estado → Região de Saúde → Município de residência")
 
     if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base_charts.columns):
         df_geo_plot = base_charts.dropna(subset=["cidade_moradia"]).copy()
-        # valor real (peso) e valor comprimido para visualização
         df_geo_plot["valor"] = df_geo_plot["peso"].clip(lower=0)
         df_geo_plot["valor_plot"] = np.sqrt(df_geo_plot["valor"])
 
@@ -1247,8 +1234,7 @@ with col_meio:
         )
     else:
         st.info(
-            "Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis. "
-            "Verifique se o arquivo de Regiões de Saúde está na pasta do app."
+            "Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis."
         )
 
 with col_dir:
@@ -1301,7 +1287,6 @@ with col_dir:
 
     st.subheader("CID (capítulo / grupo) – amostra")
 
-    # 1) Se já tiver coluna de grupo de CID vinda da tabela auxiliar
     if "cid_grupo" in base_charts.columns and base_charts["cid_grupo"].notna().any():
         top_cid_grp = (
             base_charts.groupby("cid_grupo", dropna=False)["peso"]
@@ -1325,17 +1310,12 @@ with col_dir:
             margin=dict(t=40, b=40),
         )
         st.plotly_chart(fig, use_container_width=True)
-
-    # 2) Senão, tenta achar alguma coluna de CID "bruta" (código ou descrição),
-    # evitando pegar 'cidade_moradia' por engano
     else:
         cid_candidates = []
         for c in base_charts.columns:
             cl = c.lower()
-            # começa com 'cid' (cid, cid_principal, cid10 etc), mas NÃO é cidade
             if cl.startswith("cid") and "cidade" not in cl:
                 cid_candidates.append(c)
-            # ou colunas clássicas de descrição de diagnóstico
             elif "descricao_cid" in cl or "diagnostico" in cl or "diag_princ" in cl:
                 cid_candidates.append(c)
 
@@ -1347,7 +1327,6 @@ with col_dir:
                 .reset_index()
                 .rename(columns={"peso": "valor"})
             )
-            # deixa a descrição mais curtinha
             top[col_cid] = top[col_cid].astype(str).str.upper().str[:60]
             top = top.sort_values("valor", ascending=True).tail(10)
             fig = px.bar(
@@ -1369,7 +1348,7 @@ with col_dir:
             st.info("Não encontrei nenhuma coluna de CID ou diagnóstico no dataset.")
 
 # --------------------------------------------------------------------
-# COMPARATIVO ANUAL (NO FINAL)
+# COMPARATIVO ANUAL
 # --------------------------------------------------------------------
 
 st.divider()
