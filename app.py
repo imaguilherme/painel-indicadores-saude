@@ -458,7 +458,7 @@ def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def marcar_mort_30d_proc(df: pd.DataFrame) -> pdDataFrame:
+def marcar_mort_30d_proc(df: pd.DataFrame) -> pd.DataFrame:
     if "data_obito" not in df.columns or "codigo_internacao" not in df.columns:
         df["obito_30d_proc"] = False
         return df
