@@ -1077,6 +1077,71 @@ if "%" in indicador_selecionado:
 else:
     texto_valor = f"{valor_ind:,.2f}".replace(",", ".") if pd.notna(valor_ind) else "—"
 
+
+# --------------------------------------------------------------------
+# FORMATAÇÃO PARA CARDS
+# --------------------------------------------------------------------
+def format_val_for_card(indicador: str, v: float) -> str:
+    if pd.isna(v):
+        return "—"
+    if indicador in indicadores_percentual:
+        return f"{v:.2f}%"
+    if indicador in indicadores_media:
+        return f"{v:.1f}"
+    # quantidade
+    if abs(v) >= 1000:
+        return f"{v/1000:.2f} Mil"
+    return f"{v:,.0f}".replace(",", ".")
+
+
+def card_bar_fig(df_cat: pd.DataFrame,
+                 cat_col: str,
+                 indicador: str,
+                 colors,
+                 height: int = 90):
+    """Retorna um gráfico Plotly em forma de card (barra única segmentada)."""
+    if df_cat.empty:
+        return go.Figure()
+
+    df_plot = df_cat.copy()
+    df_plot["dummy"] = "Total"
+    df_plot["text"] = (
+        df_plot[cat_col].astype(str).str.upper()
+        + "<br>"
+        + df_plot["valor"].apply(lambda v: format_val_for_card(indicador, v))
+    )
+
+    fig = px.bar(
+        df_plot,
+        x="valor",
+        y="dummy",
+        color=cat_col,
+        orientation="h",
+        text="text",
+        color_discrete_sequence=colors,
+    )
+
+    fig.update_traces(
+        textposition="inside",
+        insidetextanchor="middle",
+        textfont=dict(color="white", size=11),
+        marker_line_width=0,
+    )
+
+    fig.update_yaxes(visible=False)
+    fig.update_xaxes(visible=False)
+
+    fig.update_layout(
+        height=height,
+        margin=dict(l=1, r=1, t=5, b=5),
+        showlegend=False,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+    )
+
+    return fig
+
+
 # --------------------------------------------------------------------
 # BASE PARA GRÁFICOS E GRID PRINCIPAL
 # --------------------------------------------------------------------
@@ -1098,60 +1163,26 @@ col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
 with col_esq:
     c1, c2 = st.columns(2)
 
-    # ----------------- Sexo -----------------
+    # ----------------- Sexo (CARD) -----------------
     with c1:
         st.subheader("Sexo")
         if "sexo" in base_charts.columns:
             df_sexo = agrega_para_grafico(base_charts, ["sexo"], indicador_selecionado)
-
-            if indicador_selecionado in indicadores_percentual:
-                df_sexo["texto"] = df_sexo["valor"].map(lambda v: f"{v:.1f}%")
-            elif indicador_selecionado in indicadores_media:
-                df_sexo["texto"] = df_sexo["valor"].map(lambda v: f"{v:.1f}")
-            else:
-                df_sexo["texto"] = df_sexo["valor"].map(lambda v: f"{v:,.0f}".replace(",", "."))
-
-            fig = px.bar(
+            df_sexo = df_sexo.sort_values("valor", ascending=False)
+            fig = card_bar_fig(
                 df_sexo,
-                x="valor",
-                y="sexo",
-                orientation="h",
-                text="texto",
-                color="sexo",
-                color_discrete_sequence=["#6794DC", "#E86F86"],
+                cat_col="sexo",
+                indicador=indicador_selecionado,
+                colors=["#6794DC", "#E86F86", "#A3D977"],
+                height=90,
             )
-
-            if indicador_selecionado in indicadores_percentual:
-                max_val = max(5, float(df_sexo["valor"].max()) * 1.3)
-                fig.update_xaxes(range=[0, max_val], title=label_eixo_x(indicador_selecionado))
-            else:
-                fig.update_xaxes(title=label_eixo_x(indicador_selecionado))
-
-            fig.update_yaxes(title="")
-
-            fig.update_traces(
-                textposition="outside",
-                marker_line_width=0.5,
-                marker_line_color="rgba(0,0,0,0.25)",
-            )
-
-            fig.update_layout(
-                height=190,
-                margin=dict(t=10, b=20, l=50, r=10),
-                legend_title_text="",
-                legend_orientation="h",
-                legend_y=-0.3,
-                legend_x=0,
-                showlegend=True,
-            )
-
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
         else:
             st.info("Coluna 'sexo' não encontrada.")
 
-    # ----------------- Caráter do atendimento -----------------
+    # ----------------- Caráter do atendimento (CARD) -----------------
     with c2:
-        st.subheader("Caráter do atendimento")
+        st.subheader("Caráter do Atendimento")
         carater_col = None
         for cand in ["carater_atendimento", "caracter_atendimento", "carater", "natureza_agend"]:
             if cand in base_charts.columns:
@@ -1160,45 +1191,14 @@ with col_esq:
 
         if carater_col:
             df_car = agrega_para_grafico(base_charts, [carater_col], indicador_selecionado)
-
-            if indicador_selecionado in indicadores_percentual:
-                df_car["texto"] = df_car["valor"].map(lambda v: f"{v:.1f}%")
-            elif indicador_selecionado in indicadores_media:
-                df_car["texto"] = df_car["valor"].map(lambda v: f"{v:.1f}")
-            else:
-                df_car["texto"] = df_car["valor"].map(lambda v: f"{v:,.0f}".replace(",", "."))
-
-            fig = px.bar(
+            df_car = df_car.sort_values("valor", ascending=False)
+            fig = card_bar_fig(
                 df_car,
-                x="valor",
-                y=carater_col,
-                orientation="h",
-                text="texto",
-                color=carater_col,
-                color_discrete_sequence=px.colors.qualitative.Set2,
+                cat_col=carater_col,
+                indicador=indicador_selecionado,
+                colors=["#D8635F", "#4F9B5A", "#F0A93B", "#7A6FB3"],
+                height=90,
             )
-
-            if indicador_selecionado in indicadores_percentual:
-                max_val = max(5, float(df_car["valor"].max()) * 1.3)
-                fig.update_xaxes(range=[0, max_val], title=label_eixo_x(indicador_selecionado))
-            else:
-                fig.update_xaxes(title=label_eixo_x(indicador_selecionado))
-
-            fig.update_yaxes(title="")
-
-            fig.update_traces(
-                textposition="outside",
-                marker_line_width=0.5,
-                marker_line_color="rgba(0,0,0,0.25)",
-            )
-
-            fig.update_layout(
-                height=190,
-                margin=dict(t=10, b=20, l=50, r=10),
-                legend_title_text="",
-                showlegend=False,
-            )
-
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
         else:
             st.info("Coluna de caráter não encontrada.")
