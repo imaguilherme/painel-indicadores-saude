@@ -1175,51 +1175,61 @@ col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
 # COLUNA ESQUERDA (Sexo, Raça/Cor, Pirâmide)
 # --------------------------------------------------------------------
 with col_esq:
-    c1, c2 = st.columns(2)
-
     # ----------------- Sexo (CARD) -----------------
-    with c1:
-        st.subheader("Sexo")
-        if "sexo" in base_charts.columns:
-            df_sexo = agrega_para_grafico(base_charts, ["sexo"], indicador_selecionado)
-            df_sexo = df_sexo.sort_values("valor", ascending=False)
-            fig = card_bar_fig(
-                df_sexo,
-                cat_col="sexo",
-                indicador=indicador_selecionado,
-                colors=["#6794DC", "#E86F86", "#A3D977"],
-                height=90,
-            )
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-        else:
-            st.info("Coluna 'sexo' não encontrada.")
+    st.subheader("Sexo")
+    if "sexo" in base_charts.columns:
+        df_sexo = agrega_para_grafico(base_charts, ["sexo"], indicador_selecionado)
+        df_sexo = df_sexo.sort_values("valor", ascending=False)
+        fig = card_bar_fig(
+            df_sexo,
+            cat_col="sexo",
+            indicador=indicador_selecionado,
+            colors=["#6794DC", "#E86F86", "#A3D977"],
+            height=90,
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    else:
+        st.info("Coluna 'sexo' não encontrada.")
 
-    # ----------------- Raça/Cor × Sexo (agora aqui) -----------------
-    with c2:
-        st.subheader("Raça/Cor × Sexo")
-        if {"etnia", "sexo"}.issubset(base_charts.columns):
-            df_etnia = agrega_para_grafico(
-                base_charts, ["etnia", "sexo"], indicador_selecionado
-            )
-            fig = px.bar(
-                df_etnia,
-                y="etnia",
-                x="valor",
-                color="sexo",
-                barmode="group",
-                orientation="h",
-                text="valor",
-                color_discrete_sequence=["#6794DC", "#E86F86"],
-            )
-            fig.update_layout(
-                xaxis_title=label_eixo_x(indicador_selecionado),
-                yaxis_title="Raça/Cor",
-                height=260,
-                margin=dict(t=40, b=40),
-            )
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
-        else:
-            st.info("Requer colunas 'etnia' e 'sexo'.")
+    # ----------------- Raça/Cor × Sexo (abaixo, maior) -----------------
+    st.subheader("Raça/Cor × Sexo")
+    if {"etnia", "sexo"}.issubset(base_charts.columns):
+        df_etnia = agrega_para_grafico(
+            base_charts, ["etnia", "sexo"], indicador_selecionado
+        )
+
+        # campo numérico arredondado
+        df_etnia["valor_fmt"] = df_etnia["valor"].round(2)
+
+        fig = px.bar(
+            df_etnia,
+            y="etnia",
+            x="valor",
+            color="sexo",
+            barmode="group",
+            orientation="h",
+            text="valor_fmt",
+            color_discrete_sequence=["#6794DC", "#E86F86"],
+        )
+
+        fig.update_traces(
+            texttemplate="%{text:.2f}",
+            textposition="outside",
+        )
+
+        fig.update_xaxes(
+            title=label_eixo_x(indicador_selecionado),
+            tickformat=".2f",
+        )
+        fig.update_yaxes(title="Raça/Cor")
+
+        fig.update_layout(
+            height=350,
+            margin=dict(t=40, b=40),
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+    else:
+        st.info("Requer colunas 'etnia' e 'sexo'.")
 
     # ----------------- Pirâmide Etária -----------------
     st.subheader("Pirâmide Etária")
@@ -1301,7 +1311,7 @@ with col_esq:
 # COLUNA DO MEIO (Caráter + Treemap)
 # --------------------------------------------------------------------
 with col_meio:
-    # ----------------- Caráter do Atendimento (agora aqui) -----------------
+    # ----------------- Caráter do Atendimento -----------------
     st.subheader("Caráter do Atendimento")
     carater_col = None
     for cand in ["carater_atendimento", "caracter_atendimento", "carater", "natureza_agend"]:
