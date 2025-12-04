@@ -360,13 +360,23 @@ def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def marcar_obito_periodo(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Marca obito_no_periodo (mortalidade hospitalar).
+    Regra: data_obito entre data_internacao e data_alta (mesmo dia conta),
+    considerando apenas a DATA (ignora horário). Se data_alta for nula,
+    basta data_obito >= data_internacao.
+    """
     if {"data_internacao", "data_alta"}.issubset(df.columns):
         e = df.copy()
         if "data_obito" in e.columns:
+            data_int = pd.to_datetime(e["data_internacao"], errors="coerce").dt.floor("D")
+            data_alta = pd.to_datetime(e["data_alta"], errors="coerce").dt.floor("D")
+            data_obito = pd.to_datetime(e["data_obito"], errors="coerce").dt.floor("D")
+
             e["obito_no_periodo"] = (
-                e["data_obito"].notna()
-                & (e["data_obito"] >= e["data_internacao"])
-                & (e["data_obito"] <= (e["data_alta"] - pd.Timedelta(days=1)))
+                data_obito.notna()
+                & (data_obito >= data_int)
+                & (data_alta.isna() | (data_obito <= data_alta))
             )
         else:
             e["obito_no_periodo"] = False
@@ -528,10 +538,14 @@ def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
     if {"data_internacao", "data_alta"}.issubset(df_eventos.columns):
         e = df_eventos.copy()
         if "data_obito" in e.columns:
+            data_int = pd.to_datetime(e["data_internacao"], errors="coerce").dt.floor("D")
+            data_alta = pd.to_datetime(e["data_alta"], errors="coerce").dt.floor("D")
+            data_obito = pd.to_datetime(e["data_obito"], errors="coerce").dt.floor("D")
+
             e["obito_no_periodo"] = (
-                e["data_obito"].notna()
-                & (e["data_obito"] >= e["data_internacao"])
-                & (e["data_obito"] <= (e["data_alta"] - pd.Timedelta(days=1)))
+                data_obito.notna()
+                & (data_obito >= data_int)
+                & (data_alta.isna() | (data_obito <= data_alta))
             )
         else:
             e["obito_no_periodo"] = False
