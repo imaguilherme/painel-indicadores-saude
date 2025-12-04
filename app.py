@@ -1367,9 +1367,6 @@ with col_meio:
         )
         fig.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
         st.plotly_chart(fig, use_container_width=True)
-        st.caption(
-            "Tamanho dos blocos comprimido (raiz quadrada) para evidenciar também grupos menores."
-        )
     else:
         st.info(
             "Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis."
