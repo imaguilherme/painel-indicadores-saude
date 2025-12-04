@@ -1158,7 +1158,7 @@ base_charts = adicionar_peso_por_indicador(base_charts, indicador_selecionado)
 col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
 
 # --------------------------------------------------------------------
-# COLUNA ESQUERDA (Sexo, Caráter, Pirâmide)
+# COLUNA ESQUERDA (Sexo, Raça/Cor, Pirâmide)
 # --------------------------------------------------------------------
 with col_esq:
     c1, c2 = st.columns(2)
@@ -1180,28 +1180,32 @@ with col_esq:
         else:
             st.info("Coluna 'sexo' não encontrada.")
 
-    # ----------------- Caráter do atendimento (CARD) -----------------
+    # ----------------- Raça/Cor × Sexo (agora aqui) -----------------
     with c2:
-        st.subheader("Caráter do Atendimento")
-        carater_col = None
-        for cand in ["carater_atendimento", "caracter_atendimento", "carater", "natureza_agend"]:
-            if cand in base_charts.columns:
-                carater_col = cand
-                break
-
-        if carater_col:
-            df_car = agrega_para_grafico(base_charts, [carater_col], indicador_selecionado)
-            df_car = df_car.sort_values("valor", ascending=False)
-            fig = card_bar_fig(
-                df_car,
-                cat_col=carater_col,
-                indicador=indicador_selecionado,
-                colors=["#D8635F", "#4F9B5A", "#F0A93B", "#7A6FB3"],
-                height=90,
+        st.subheader("Raça/Cor × Sexo")
+        if {"etnia", "sexo"}.issubset(base_charts.columns):
+            df_etnia = agrega_para_grafico(
+                base_charts, ["etnia", "sexo"], indicador_selecionado
             )
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            fig = px.bar(
+                df_etnia,
+                y="etnia",
+                x="valor",
+                color="sexo",
+                barmode="group",
+                orientation="h",
+                text="valor",
+                color_discrete_sequence=["#6794DC", "#E86F86"],
+            )
+            fig.update_layout(
+                xaxis_title=label_eixo_x(indicador_selecionado),
+                yaxis_title="Raça/Cor",
+                height=260,
+                margin=dict(t=40, b=40),
+            )
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
         else:
-            st.info("Coluna de caráter não encontrada.")
+            st.info("Requer colunas 'etnia' e 'sexo'.")
 
     # ----------------- Pirâmide Etária -----------------
     st.subheader("Pirâmide Etária")
@@ -1280,38 +1284,48 @@ with col_esq:
         st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
 
 # --------------------------------------------------------------------
-# COLUNA DO MEIO
+# COLUNA DO MEIO (Caráter + Treemap)
 # --------------------------------------------------------------------
 with col_meio:
-    # Raça/Cor × Sexo
-    st.subheader("Raça/Cor × Sexo")
-    if {"etnia", "sexo"}.issubset(base_charts.columns):
-        df_etnia = agrega_para_grafico(
-            base_charts, ["etnia", "sexo"], indicador_selecionado
+    # ----------------- Caráter do Atendimento (agora aqui) -----------------
+    st.subheader("Caráter do Atendimento")
+    carater_col = None
+    for cand in ["carater_atendimento", "caracter_atendimento", "carater", "natureza_agend"]:
+        if cand in base_charts.columns:
+            carater_col = cand
+            break
+
+    if carater_col:
+        df_car = agrega_para_grafico(base_charts, [carater_col], indicador_selecionado)
+        df_car = df_car.sort_values("valor", ascending=False)
+
+        # mapa de cores: ELE verde, URG verde escuro, EMG amarelo
+        car_colors = []
+        for v in df_car[carater_col]:
+            s = str(v).upper()
+            if s.startswith("ELE"):
+                car_colors.append("#4CAF50")   # verde eletivo
+            elif s.startswith("URG"):
+                car_colors.append("#2E7D32")   # urgência verde escuro
+            elif s.startswith("EME") or s.startswith("EMG"):
+                car_colors.append("#FBC02D")   # emergência amarela
+            else:
+                car_colors.append("#7A6FB3")   # cor padrão
+
+        fig = card_bar_fig(
+            df_car,
+            cat_col=carater_col,
+            indicador=indicador_selecionado,
+            colors=car_colors,
+            height=90,
         )
-        fig = px.bar(
-            df_etnia,
-            y="etnia",
-            x="valor",
-            color="sexo",
-            barmode="group",
-            orientation="h",
-            text="valor",
-            color_discrete_sequence=["#6794DC", "#E86F86"],
-        )
-        fig.update_layout(
-            xaxis_title=label_eixo_x(indicador_selecionado),
-            yaxis_title="Raça/Cor",
-            height=320,
-            margin=dict(t=40, b=40),
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     else:
-        st.info("Requer colunas 'etnia' e 'sexo'.")
+        st.info("Coluna de caráter não encontrada.")
 
     st.markdown("---")
 
-    # Treemap
+    # ----------------- Treemap -----------------
     st.subheader("Estado → Região de Saúde → Município de residência")
 
     if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base_charts.columns):
@@ -1338,7 +1352,7 @@ with col_meio:
         )
 
 # --------------------------------------------------------------------
-# COLUNA DIREITA
+# COLUNA DIREITA (Indicador, Procedimentos, CID)
 # --------------------------------------------------------------------
 with col_dir:
     st.subheader(indicador_selecionado)
