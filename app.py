@@ -1207,10 +1207,10 @@ base_charts = adicionar_peso_por_indicador(base_charts, indicador_selecionado)
 col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
 
 # --------------------------------------------------------------------
-# COLUNA ESQUERDA (Sexo, Raça/Cor, Pirâmide)
+# PRIMEIRA COLUNA: Sexo; Raça/Cor × Sexo; Pirâmide Etária
 # --------------------------------------------------------------------
 with col_esq:
-    # ----------------- Sexo (CARD) -----------------
+    # Sexo (CARD)
     st.subheader("Sexo")
     if "sexo" in base_charts.columns:
         df_sexo = agrega_para_grafico(base_charts, ["sexo"], indicador_selecionado)
@@ -1229,14 +1229,12 @@ with col_esq:
     else:
         st.info("Coluna 'sexo' não encontrada.")
 
-    # ----------------- Raça/Cor × Sexo (abaixo, maior) -----------------
+    # Raça/Cor × Sexo
     st.subheader("Raça/Cor × Sexo")
     if {"etnia", "sexo"}.issubset(base_charts.columns):
         df_etnia = agrega_para_grafico(
             base_charts, ["etnia", "sexo"], indicador_selecionado
         )
-
-        # campo numérico arredondado
         df_etnia["valor_fmt"] = df_etnia["valor"].round(2)
 
         sexo_color_map = get_sexo_color_map(df_etnia["sexo"].unique())
@@ -1271,7 +1269,7 @@ with col_esq:
     else:
         st.info("Requer colunas 'etnia' e 'sexo'.")
 
-    # ----------------- Pirâmide Etária -----------------
+    # Pirâmide Etária
     st.subheader("Pirâmide Etária")
     if {"faixa_etaria", "sexo"}.issubset(base_charts.columns):
         categorias = [
@@ -1306,7 +1304,7 @@ with col_esq:
 
         for idx, sexo_cat in enumerate(pivot.columns):
             values = pivot[sexo_cat]
-            x_vals = -values if idx == 0 else values  # mantém lógica atual de lados
+            x_vals = -values if idx == 0 else values  # lado esquerdo/direito
 
             cor = sexo_color_map.get(sexo_cat, "#A3A3A3")
 
@@ -1346,10 +1344,11 @@ with col_esq:
         st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
 
 # --------------------------------------------------------------------
-# COLUNA DO MEIO (Caráter + Treemap)
+# SEGUNDA COLUNA:
+# Caráter do Atendimento; Procedimentos; CID; Treemap
 # --------------------------------------------------------------------
 with col_meio:
-    # ----------------- Caráter do Atendimento -----------------
+    # Caráter do Atendimento
     st.subheader("Caráter do Atendimento")
     carater_col = None
     for cand in ["carater_atendimento", "caracter_atendimento", "carater", "natureza_agend"]:
@@ -1361,18 +1360,17 @@ with col_meio:
         df_car = agrega_para_grafico(base_charts, [carater_col], indicador_selecionado)
         df_car = df_car.sort_values("valor", ascending=False)
 
-        # mapa de cores: ELE verde, URG verde escuro, EMG amarelo
         car_colors = []
         for v in df_car[carater_col]:
             s = str(v).upper()
             if s.startswith("ELE"):
-                car_colors.append("#4CAF50")   # verde eletivo
+                car_colors.append("#4CAF50")   # eletivo
             elif s.startswith("URG"):
-                car_colors.append("#2E7D32")   # urgência verde escuro
+                car_colors.append("#2E7D32")   # urgência
             elif s.startswith("EME") or s.startswith("EMG"):
-                car_colors.append("#FBC02D")   # emergência amarela
+                car_colors.append("#FBC02D")   # emergência
             else:
-                car_colors.append("#7A6FB3")   # cor padrão
+                car_colors.append("#7A6FB3")   # padrão
 
         fig = card_bar_fig(
             df_car,
@@ -1387,46 +1385,7 @@ with col_meio:
 
     st.markdown("---")
 
-    # ----------------- Treemap -----------------
-    st.subheader("Estado → Região de Saúde → Município de residência")
-
-    if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base_charts.columns):
-        df_geo_raw = base_charts.dropna(subset=["cidade_moradia"]).copy()
-        df_geo_plot = agrega_para_grafico(
-            df_geo_raw, ["uf", "regiao_saude", "cidade_moradia"], indicador_selecionado
-        )
-        df_geo_plot["valor"] = df_geo_plot["valor"].clip(lower=0)
-        df_geo_plot["valor_plot"] = np.sqrt(df_geo_plot["valor"])
-
-        fig = px.treemap(
-            df_geo_plot,
-            path=["uf", "regiao_saude", "cidade_moradia"],
-            values="valor_plot",
-        )
-        fig.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info(
-            "Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis."
-        )
-
-# --------------------------------------------------------------------
-# COLUNA DIREITA (Indicador, Procedimentos, CID, Boxplot)
-# --------------------------------------------------------------------
-with col_dir:
-    st.subheader(indicador_selecionado)
-    if pd.notna(valor_ind):
-        st.markdown(
-            f"<h2 style='text-align:center;'>{texto_valor}</h2>",
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown("<h2 style='text-align:center;'>—</h2>", unsafe_allow_html=True)
-    st.caption("Valor do indicador no período filtrado")
-
-    st.markdown("---")
-
-    # Procedimentos
+    # Procedimentos (amostra)
     st.subheader("Procedimentos (amostra)")
     proc_cols = [
         c
@@ -1457,7 +1416,7 @@ with col_dir:
 
     st.markdown("---")
 
-    # CID
+    # CID (capítulo / grupo) – amostra
     st.subheader("CID (capítulo / grupo) – amostra")
 
     if "cid_grupo" in base_charts.columns and base_charts["cid_grupo"].notna().any():
@@ -1512,8 +1471,49 @@ with col_dir:
         else:
             st.info("Não encontrei nenhuma coluna de CID ou diagnóstico no dataset.")
 
-    # ----------------- Boxplot Idade x Sexo -----------------
     st.markdown("---")
+
+    # Treemap – Estado → Região de Saúde → Município
+    st.subheader("Estado → Região de Saúde → Município de residência")
+
+    if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base_charts.columns):
+        df_geo_raw = base_charts.dropna(subset=["cidade_moradia"]).copy()
+        df_geo_plot = agrega_para_grafico(
+            df_geo_raw, ["uf", "regiao_saude", "cidade_moradia"], indicador_selecionado
+        )
+        df_geo_plot["valor"] = df_geo_plot["valor"].clip(lower=0)
+        df_geo_plot["valor_plot"] = np.sqrt(df_geo_plot["valor"])
+
+        fig = px.treemap(
+            df_geo_plot,
+            path=["uf", "regiao_saude", "cidade_moradia"],
+            values="valor_plot",
+        )
+        fig.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info(
+            "Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis."
+        )
+
+# --------------------------------------------------------------------
+# TERCEIRA COLUNA:
+# Valor do indicador; Boxplot – Idade por sexo
+# --------------------------------------------------------------------
+with col_dir:
+    st.subheader(indicador_selecionado)
+    if pd.notna(valor_ind):
+        st.markdown(
+            f"<h2 style='text-align:center;'>{texto_valor}</h2>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown("<h2 style='text-align:center;'>—</h2>", unsafe_allow_html=True)
+    st.caption("Valor do indicador no período filtrado")
+
+    st.markdown("---")
+
+    # Boxplot – Idade por sexo
     st.subheader("Boxplot – Idade por sexo")
 
     if {"idade", "sexo"}.issubset(base_charts.columns):
@@ -1527,7 +1527,7 @@ with col_dir:
             x="sexo",
             y="idade",
             color="sexo",
-            points="all",  # mostra pontos individuais (visu contínua)
+            points="all",
             color_discrete_map=sexo_color_map,
         )
 
