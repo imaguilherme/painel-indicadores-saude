@@ -1015,7 +1015,7 @@ def label_eixo_x(indicador):
     return "Quantidade"
 
 
-# ---------- NOVO: mapa de cores fixas por sexo ----------
+# ---------- mapa de cores fixas por sexo ----------
 def get_sexo_color_map(categories):
     """
     Retorna um dict categoria -> cor, mantendo:
@@ -1411,7 +1411,7 @@ with col_meio:
         )
 
 # --------------------------------------------------------------------
-# COLUNA DIREITA (Indicador, Procedimentos, CID)
+# COLUNA DIREITA (Indicador, Procedimentos, CID, Boxplot)
 # --------------------------------------------------------------------
 with col_dir:
     st.subheader(indicador_selecionado)
@@ -1511,6 +1511,36 @@ with col_dir:
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Não encontrei nenhuma coluna de CID ou diagnóstico no dataset.")
+
+    # ----------------- Boxplot Idade x Sexo -----------------
+    st.markdown("---")
+    st.subheader("Boxplot – Idade por sexo")
+
+    if {"idade", "sexo"}.issubset(base_charts.columns):
+        df_box = base_charts.dropna(subset=["idade", "sexo"]).copy()
+        df_box["sexo"] = df_box["sexo"].astype(str).str.strip()
+
+        sexo_color_map = get_sexo_color_map(df_box["sexo"].unique())
+
+        fig_box = px.box(
+            df_box,
+            x="sexo",
+            y="idade",
+            color="sexo",
+            points="all",  # mostra pontos individuais (visu contínua)
+            color_discrete_map=sexo_color_map,
+        )
+
+        fig_box.update_xaxes(title="Sexo")
+        fig_box.update_yaxes(title="Idade (anos)")
+        fig_box.update_layout(
+            height=400,
+            margin=dict(t=40, b=40),
+        )
+
+        st.plotly_chart(fig_box, use_container_width=True)
+    else:
+        st.info("Não há colunas 'idade' e 'sexo' disponíveis para o boxplot.")
 
 # --------------------------------------------------------------------
 # COMPARATIVO ANUAL
