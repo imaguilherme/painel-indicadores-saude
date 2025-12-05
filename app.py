@@ -743,13 +743,24 @@ def build_filters(df: pd.DataFrame):
 
     st.sidebar.header("Filtros")
 
-    anos_col = "ano_internacao" if "ano_internacao" in df.columns else ("ano" if "ano" in df.columns else None)
-    if anos_col:
-        anos = sorted(df[anos_col].dropna().unique().tolist())
-    else:
-        anos = []
-    ano_sel = st.sidebar.multiselect("Ano da internação", anos, default=anos)
+    # ---- Período da internação (calendário) ----
+    periodo_sel = None
+    if "data_internacao" in df.columns:
+        min_dt = pd.to_datetime(df["data_internacao"]).min().date()
+        max_dt = pd.to_datetime(df["data_internacao"]).max().date()
+        periodo_sel = st.sidebar.date_input(
+            "Período da internação",
+            value=(min_dt, max_dt),
+            format="DD/MM/YYYY",
+        )
 
+        # garantir tupla (ini, fim)
+        if not isinstance(periodo_sel, (list, tuple)):
+            periodo_sel = (periodo_sel, periodo_sel)
+    else:
+        st.sidebar.info("Coluna 'data_internacao' não encontrada para filtro de período.")
+
+    # ---- Idade ----
     if "idade" in df.columns and df["idade"].notna().any():
         idade_min, idade_max = int(np.nanmin(df["idade"])), int(np.nanmax(df["idade"]))
     else:
@@ -758,6 +769,7 @@ def build_filters(df: pd.DataFrame):
         "Idade", min_value=0, max_value=max(idade_max, 1), value=(idade_min, idade_max), step=1
     )
 
+    # ---- Estado ----
     estado_col = next(
         (c for c in df.columns if c.lower() in ["estado_residencia", "uf_residencia", "uf", "estado", "sigla_uf"]),
         None,
@@ -767,6 +779,7 @@ def build_filters(df: pd.DataFrame):
         estados = sorted(df[estado_col].dropna().astype(str).unique().tolist())
         estados_sel = st.sidebar.multiselect("Estado de residência", estados, default=estados)
 
+    # ---- Região de saúde ----
     regiao_col = next(
         (c for c in df.columns if "regiao" in c.lower() and "saud" in c.lower()),
         None,
@@ -776,6 +789,7 @@ def build_filters(df: pd.DataFrame):
         regioes = sorted(df[regiao_col].dropna().astype(str).unique().tolist())
         regioes_sel = st.sidebar.multiselect("Região de saúde", regioes, default=regioes)
 
+    # ---- Município ----
     cidade_col = "cidade_moradia" if "cidade_moradia" in df.columns else None
     cidades_sel = []
     if cidade_col:
@@ -785,13 +799,14 @@ def build_filters(df: pd.DataFrame):
             "Município de residência (amostra)", cidade_vals, default=default_cidades
         )
 
+    # ---- Sexo ----
     sexo_sel = []
     if "sexo" in df.columns:
         sexos = sorted(df["sexo"].dropna().astype(str).unique().tolist())
         sexo_sel = st.sidebar.multiselect("Sexo", sexos, default=sexos)
 
     return {
-        "ano": ano_sel,
+        "periodo": periodo_sel,
         "idade": idade_sel,
         "estado": estados_sel,
         "regiao": regioes_sel,
@@ -801,14 +816,18 @@ def build_filters(df: pd.DataFrame):
 
 
 def apply_filters(df: pd.DataFrame, f):
-    if "ano_internacao" in df.columns and f["ano"]:
-        df = df[df["ano_internacao"].isin(f["ano"])]
-    elif "ano" in df.columns and f["ano"]:
-        df = df[df["ano"].isin(f["ano"])]
+    # Período
+    if "data_internacao" in df.columns and f.get("periodo"):
+        ini, fim = f["periodo"]
+        ini = pd.to_datetime(ini)
+        fim = pd.to_datetime(fim) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+        df = df[(df["data_internacao"] >= ini) & (df["data_internacao"] <= fim)]
 
+    # Idade
     if "idade" in df.columns and f["idade"]:
         df = df[(df["idade"] >= f["idade"][0]) & (df["idade"] <= f["idade"][1])]
 
+    # Estado
     estado_col = next(
         (c for c in df.columns if c.lower() in ["estado_residencia", "uf_residencia", "uf", "estado", "sigla_uf"]),
         None,
@@ -816,6 +835,7 @@ def apply_filters(df: pd.DataFrame, f):
     if estado_col and f["estado"]:
         df = df[df[estado_col].isin(f["estado"])]
 
+    # Região de saúde
     regiao_col = next(
         (c for c in df.columns if "regiao" in c.lower() and "saud" in c.lower()),
         None,
@@ -823,9 +843,11 @@ def apply_filters(df: pd.DataFrame, f):
     if regiao_col and f["regiao"]:
         df = df[df[regiao_col].isin(f["regiao"])]
 
+    # Município
     if "cidade_moradia" in df.columns and f["cidade"]:
         df = df[df["cidade_moradia"].isin(f["cidade"])]
 
+    # Sexo
     if "sexo" in df.columns and f["sexo"]:
         df = df[df["sexo"].isin(f["sexo"])]
 
@@ -834,8 +856,9 @@ def apply_filters(df: pd.DataFrame, f):
 
 def show_active_filters(f):
     partes = []
-    if f["ano"]:
-        partes.append("**Ano:** " + ", ".join(str(a) for a in f["ano"]))
+    if f.get("periodo"):
+        ini, fim = f["periodo"]
+        partes.append(f"**Período:** {ini.strftime('%d/%m/%Y')} – {fim.strftime('%d/%m/%Y')}")
     if f["idade"]:
         partes.append(f"**Idade:** {f['idade'][0]}–{f['idade'][1]} anos")
     if f["estado"]:
@@ -1040,7 +1063,7 @@ def get_sexo_color_map(categories):
 st.markdown("### Indicadores disponíveis")
 
 indicador_selecionado = st.radio(
-    "Selecione o indicador para detalhar e para o comparativo anual:",
+    "Selecione o indicador para detalhar e para o comparativo temporal:",
     indicadores_icardio,
     horizontal=True,
 )
@@ -1543,11 +1566,17 @@ with col_dir:
         st.info("Não há colunas 'idade' e 'sexo' disponíveis para o boxplot.")
 
 # --------------------------------------------------------------------
-# COMPARATIVO ANUAL
+# COMPARATIVO TEMPORAL (ANO ou MÊS)
 # --------------------------------------------------------------------
 
 st.divider()
-st.markdown("### Comparativo anual do indicador selecionado")
+st.markdown("### Comparativo do indicador selecionado")
+
+modo_comp = st.radio(
+    "Agrupar por:",
+    ["Ano", "Mês"],
+    horizontal=True,
+)
 
 ano_col = (
     "ano_internacao"
@@ -1555,43 +1584,87 @@ ano_col = (
     else ("ano" if "ano" in df_f.columns else None)
 )
 
-if ano_col:
-    df_valid = df_f[~df_f[ano_col].isna()].copy()
-    if not df_valid.empty:
-        anos_validos = sorted(df_valid[ano_col].dropna().unique())
-        linhas = []
-        for a in anos_validos:
-            df_ano = df_valid[df_valid[ano_col] == a]
-            df_pac_ano = pacientes_unicos(df_ano)
-            val_ano = calcular_indicador_ano(indicador_selecionado, df_ano, df_pac_ano)
-            linhas.append({ano_col: int(a), "valor": val_ano})
+if modo_comp == "Ano":
+    if ano_col:
+        df_valid = df_f[~df_f[ano_col].isna()].copy()
+        if not df_valid.empty:
+            anos_validos = sorted(df_valid[ano_col].dropna().unique())
+            linhas = []
+            for a in anos_validos:
+                df_ano = df_valid[df_valid[ano_col] == a]
+                df_pac_ano = pacientes_unicos(df_ano)
+                val_ano = calcular_indicador_ano(indicador_selecionado, df_ano, df_pac_ano)
+                linhas.append({ano_col: int(a), "valor": val_ano})
 
-        df_plot = pd.DataFrame(linhas).dropna(subset=["valor"]).sort_values(ano_col)
+            df_plot = pd.DataFrame(linhas).dropna(subset=["valor"]).sort_values(ano_col)
 
-        if not df_plot.empty:
-            fig_ano = px.bar(df_plot, x=ano_col, y="valor")
-            if "%" in indicador_selecionado:
-                fig_ano.update_traces(
-                    texttemplate="%{y:.2f}%",
-                    textposition="outside",
+            if not df_plot.empty:
+                fig_ano = px.bar(df_plot, x=ano_col, y="valor")
+                if "%" in indicador_selecionado:
+                    fig_ano.update_traces(
+                        texttemplate="%{y:.2f}%",
+                        textposition="outside",
+                    )
+                    fig_ano.update_yaxes(tickformat=".2f")
+                else:
+                    fig_ano.update_traces(
+                        texttemplate="%{y}",
+                        textposition="outside",
+                    )
+
+                fig_ano.update_layout(
+                    xaxis_title="Ano",
+                    yaxis_title=indicador_selecionado,
+                    height=280,
+                    margin=dict(t=40, b=40),
                 )
-                fig_ano.update_yaxes(tickformat=".2f")
+                st.plotly_chart(fig_ano, use_container_width=True)
             else:
-                fig_ano.update_traces(
-                    texttemplate="%{y}",
-                    textposition="outside",
-                )
-
-            fig_ano.update_layout(
-                xaxis_title="Ano",
-                yaxis_title=indicador_selecionado,
-                height=280,
-                margin=dict(t=40, b=40),
-            )
-            st.plotly_chart(fig_ano, use_container_width=True)
+                st.info("Sem valores para o comparativo anual com o indicador selecionado.")
         else:
-            st.info("Sem valores para o comparativo anual com o indicador selecionado.")
+            st.info("Sem dados para o comparativo anual com os filtros atuais.")
     else:
-        st.info("Sem dados para o comparativo anual com os filtros atuais.")
-else:
-    st.info("Coluna de ano não encontrada no dataset.")
+        st.info("Coluna de ano não encontrada no dataset.")
+
+else:  # modo_comp == "Mês"
+    if "data_internacao" in df_f.columns:
+        df_valid = df_f[~df_f["data_internacao"].isna()].copy()
+        if not df_valid.empty:
+            df_valid["mes_ano"] = df_valid["data_internacao"].dt.to_period("M")
+            linhas = []
+            for m in sorted(df_valid["mes_ano"].unique()):
+                df_mes = df_valid[df_valid["mes_ano"] == m]
+                df_pac_mes = pacientes_unicos(df_mes)
+                val_mes = calcular_indicador_ano(indicador_selecionado, df_mes, df_pac_mes)
+                label = f"{m.month:02d}/{m.year}"
+                linhas.append({"mes": label, "valor": val_mes})
+
+            df_plot = pd.DataFrame(linhas).dropna(subset=["valor"])
+
+            if not df_plot.empty:
+                fig_mes = px.bar(df_plot, x="mes", y="valor")
+                if "%" in indicador_selecionado:
+                    fig_mes.update_traces(
+                        texttemplate="%{y:.2f}%",
+                        textposition="outside",
+                    )
+                    fig_mes.update_yaxes(tickformat=".2f")
+                else:
+                    fig_mes.update_traces(
+                        texttemplate="%{y}",
+                        textposition="outside",
+                    )
+
+                fig_mes.update_layout(
+                    xaxis_title="Mês/Ano",
+                    yaxis_title=indicador_selecionado,
+                    height=280,
+                    margin=dict(t=40, b=40),
+                )
+                st.plotly_chart(fig_mes, use_container_width=True)
+            else:
+                st.info("Sem valores para o comparativo mensal com o indicador selecionado.")
+        else:
+            st.info("Sem dados para o comparativo mensal com os filtros atuais.")
+    else:
+        st.info("Coluna 'data_internacao' não encontrada para o comparativo mensal.")
