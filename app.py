@@ -614,7 +614,7 @@ def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
             cod_norm = cod.astype("string")
             miss_mask = cod_norm.isna() | (cod_norm.str.strip() == "")
             cod_norm = cod_norm.fillna("")
-            cod_norm.loc[miss_mask] = "__SEM_CODIGO__" + df_eventos.index.astype(str)
+            cod_norm.loc[miss_mask] = "__SEM_CODIGO__" + cod_norm.index[miss_mask].astype(str)
             internacoes = cod_norm.nunique(dropna=True)
         else:
             internacoes = cod.nunique(dropna=True)
