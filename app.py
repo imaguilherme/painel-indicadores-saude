@@ -137,30 +137,29 @@ def load_duckdb(csv_paths):
 
     con.execute(
         """
-        CREATE VIEW evolu_n AS
+                CREATE VIEW evolu_n AS
         SELECT
             lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            *
+            * EXCLUDE (prontuario_anonimo)
         FROM evolu;
 
         CREATE VIEW cids_n AS
         SELECT
             lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            *
+            * EXCLUDE (prontuario_anonimo)
         FROM cids;
 
-        -- Base de procedimentos com código de internação
+        -- Base de procedimentos com código de internação (normalizado)
         CREATE VIEW proc_n AS
         SELECT
             lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            -- Normaliza o código de internação; se vier vazio/nulo, cria um fallback estável
             COALESCE(
                 NULLIF(trim(CAST(codigo_internacao AS VARCHAR)), ''),
                 'SEM_' || lower(trim(CAST(prontuario_anonimo AS VARCHAR))) || '_' ||
                 COALESCE(CAST(CAST(data_internacao AS DATE) AS VARCHAR), 'NA') || '_' ||
                 COALESCE(CAST(CAST(data_alta AS DATE) AS VARCHAR), 'NA')
             ) AS codigo_internacao,
-            *
+            * EXCLUDE (prontuario_anonimo, codigo_internacao)
         FROM proced;
 
         -- Agregação por internação (1 linha por CODIGO_INTERNACAO)
@@ -184,14 +183,7 @@ def load_duckdb(csv_paths):
         CREATE VIEW dataset AS
         SELECT
             i.*,
-            e.* EXCLUDE (
-                prontuario_anonimo,
-                codigo_internacao,
-                data_internacao,
-                data_alta,
-                data_obito,
-                natureza_agend
-            ),
+            e.* EXCLUDE (prontuario_anonimo),
             c.* EXCLUDE (prontuario_anonimo)
         FROM internacoes_base i
         LEFT JOIN evolu_n e USING (prontuario_anonimo)
