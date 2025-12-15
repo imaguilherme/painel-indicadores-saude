@@ -743,20 +743,83 @@ def build_filters(df: pd.DataFrame):
 
     st.sidebar.header("Filtros")
 
+    def _multiselect_com_todos(titulo: str, opcoes: list, key: str, default=None, help_text: str | None = None):
+        """Multiselect com a opção 'Selecionar todos' DENTRO da lista.
+
+        - '✅ Selecionar todos' aparece como um item no dropdown.
+        - Quando selecionado, marca todos os itens.
+        - Se o usuário desmarcar qualquer item após isso, o 'Selecionar todos' é removido automaticamente.
+        """
+        all_token = "✅ Selecionar todos"
+        prev_key = f"__prev_{key}"
+
+        opcoes = [str(x) for x in opcoes]
+        if default is None:
+            default = opcoes
+        default = [str(x) for x in default if str(x) in opcoes]
+
+        # inicializa estado
+        if key not in st.session_state:
+            if len(opcoes) > 0 and set(default) == set(opcoes):
+                st.session_state[key] = [all_token] + opcoes
+            else:
+                st.session_state[key] = default
+
+        if prev_key not in st.session_state:
+            st.session_state[prev_key] = st.session_state.get(key, []).copy()
+
+        def _on_change():
+            prev = st.session_state.get(prev_key, [])
+            curr = st.session_state.get(key, [])
+
+            # 1) Token foi marcado agora -> selecionar tudo
+            if all_token in curr and all_token not in prev:
+                st.session_state[key] = [all_token] + opcoes
+
+            # 2) Token já estava marcado e algo foi desmarcado -> remover token e manter parcial
+            elif all_token in prev and all_token in curr and set(curr) != set([all_token] + opcoes):
+                st.session_state[key] = [x for x in curr if x != all_token]
+
+            else:
+                # limpa token se aparecer indevidamente
+                curr_wo = [x for x in curr if x != all_token]
+
+                # se todos marcados manualmente -> adiciona token (para aparecer como um "chip" igual os outros)
+                if len(opcoes) > 0 and set(curr_wo) == set(opcoes):
+                    st.session_state[key] = [all_token] + opcoes
+                else:
+                    st.session_state[key] = curr_wo
+
+            st.session_state[prev_key] = st.session_state.get(key, []).copy()
+
+        with st.sidebar.container(border=True):
+            st.markdown(f"**{titulo}**")
+            st.multiselect(
+                titulo,
+                options=[all_token] + opcoes,
+                default=st.session_state.get(key, []),
+                key=key,
+                on_change=_on_change,
+                label_visibility="collapsed",
+                help=help_text,
+            )
+
+        # guarda "prev" para a próxima interação
+        st.session_state[prev_key] = st.session_state.get(key, []).copy()
+
+        sel_final = st.session_state.get(key, [])
+        return [x for x in sel_final if x != all_token]
+
     # ---- Período da internação (calendário) ----
     periodo_sel = None
     if "data_internacao" in df.columns:
         min_dt = pd.to_datetime(df["data_internacao"]).min().date()
         max_dt = pd.to_datetime(df["data_internacao"]).max().date()
-
-        with st.sidebar.container(border=True):
-            st.markdown("**Período da internação**")
-            periodo_sel = st.date_input(
-                "Período da internação",
-                value=(min_dt, max_dt),
-                format="DD/MM/YYYY",
-                label_visibility="collapsed",
-            )
+        periodo_sel = st.sidebar.date_input(
+            "Período da internação",
+            value=(min_dt, max_dt),
+            format="DD/MM/YYYY",
+        )
 
         if not isinstance(periodo_sel, (list, tuple)):
             periodo_sel = (periodo_sel, periodo_sel)
@@ -768,17 +831,13 @@ def build_filters(df: pd.DataFrame):
         idade_min, idade_max = int(np.nanmin(df["idade"])), int(np.nanmax(df["idade"]))
     else:
         idade_min, idade_max = 0, 120
-
-    with st.sidebar.container(border=True):
-        st.markdown("**Idade**")
-        idade_sel = st.slider(
-            "Idade",
-            min_value=0,
-            max_value=max(idade_max, 1),
-            value=(idade_min, idade_max),
-            step=1,
-            label_visibility="collapsed",
-        )
+    idade_sel = st.sidebar.slider(
+        "Idade",
+        min_value=0,
+        max_value=max(idade_max, 1),
+        value=(idade_min, idade_max),
+        step=1,
+    )
 
     # ---- Estado ----
     estado_col = next(
@@ -788,19 +847,12 @@ def build_filters(df: pd.DataFrame):
     estados_sel = []
     if estado_col:
         estados = sorted(df[estado_col].dropna().astype(str).unique().tolist())
-
-        with st.sidebar.container(border=True):
-            st.markdown("**Estado de residência**")
-            if st.button("Selecionar todos (Estados)", key="btn_all_estados", use_container_width=True):
-                st.session_state["ms_estados"] = estados
-
-            estados_sel = st.multiselect(
-                "Estado de residência",
-                estados,
-                default=estados,
-                key="ms_estados",
-                label_visibility="collapsed",
-            )
+        estados_sel = _multiselect_com_todos(
+            "Estado de residência",
+            estados,
+            key="ms_estados",
+            default=estados,
+        )
 
     # ---- Região de saúde ----
     regiao_col = next(
@@ -810,19 +862,12 @@ def build_filters(df: pd.DataFrame):
     regioes_sel = []
     if regiao_col:
         regioes = sorted(df[regiao_col].dropna().astype(str).unique().tolist())
-
-        with st.sidebar.container(border=True):
-            st.markdown("**Região de saúde**")
-            if st.button("Selecionar todos (Regiões)", key="btn_all_regioes", use_container_width=True):
-                st.session_state["ms_regioes"] = regioes
-
-            regioes_sel = st.multiselect(
-                "Região de saúde",
-                regioes,
-                default=regioes,
-                key="ms_regioes",
-                label_visibility="collapsed",
-            )
+        regioes_sel = _multiselect_com_todos(
+            "Região de saúde",
+            regioes,
+            key="ms_regioes",
+            default=regioes,
+        )
 
     # ---- Município ----
     cidade_col = "cidade_moradia" if "cidade_moradia" in df.columns else None
@@ -830,37 +875,23 @@ def build_filters(df: pd.DataFrame):
     if cidade_col:
         cidade_vals = sorted(df[cidade_col].dropna().astype(str).unique().tolist())
         default_cidades = cidade_vals if len(cidade_vals) <= 25 else cidade_vals[:25]
-
-        with st.sidebar.container(border=True):
-            st.markdown("**Município de residência (amostra)**")
-            if st.button("Selecionar todos (Municípios)", key="btn_all_cidades", use_container_width=True):
-                st.session_state["ms_cidades"] = cidade_vals
-
-            cidades_sel = st.multiselect(
-                "Município de residência (amostra)",
-                cidade_vals,
-                default=default_cidades,
-                key="ms_cidades",
-                label_visibility="collapsed",
-            )
+        cidades_sel = _multiselect_com_todos(
+            "Município de residência (amostra)",
+            cidade_vals,
+            key="ms_cidades",
+            default=default_cidades,
+        )
 
     # ---- Sexo ----
     sexo_sel = []
     if "sexo" in df.columns:
         sexos = sorted(df["sexo"].dropna().astype(str).unique().tolist())
-
-        with st.sidebar.container(border=True):
-            st.markdown("**Sexo**")
-            if st.button("Selecionar todos (Sexo)", key="btn_all_sexos", use_container_width=True):
-                st.session_state["ms_sexos"] = sexos
-
-            sexo_sel = st.multiselect(
-                "Sexo",
-                sexos,
-                default=sexos,
-                key="ms_sexos",
-                label_visibility="collapsed",
-            )
+        sexo_sel = _multiselect_com_todos(
+            "Sexo",
+            sexos,
+            key="ms_sexos",
+            default=sexos,
+        )
 
     return {
         "periodo": periodo_sel,
