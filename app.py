@@ -777,7 +777,18 @@ def build_filters(df: pd.DataFrame):
     estados_sel = []
     if estado_col:
         estados = sorted(df[estado_col].dropna().astype(str).unique().tolist())
-        estados_sel = st.sidebar.multiselect("Estado de residência", estados, default=estados)
+        # inicializa seleção (default = todos)
+        if "ms_estados" not in st.session_state:
+            st.session_state["ms_estados"] = estados
+
+        if st.sidebar.button("Selecionar todos (Estados)", key="btn_all_estados"):
+            st.session_state["ms_estados"] = estados
+
+        estados_sel = st.sidebar.multiselect(
+            "Estado de residência",
+            estados,
+            key="ms_estados",
+        )
 
     # ---- Região de saúde ----
     regiao_col = next(
@@ -787,7 +798,18 @@ def build_filters(df: pd.DataFrame):
     regioes_sel = []
     if regiao_col:
         regioes = sorted(df[regiao_col].dropna().astype(str).unique().tolist())
-        regioes_sel = st.sidebar.multiselect("Região de saúde", regioes, default=regioes)
+        # inicializa seleção (default = todos)
+        if "ms_regioes" not in st.session_state:
+            st.session_state["ms_regioes"] = regioes
+
+        if st.sidebar.button("Selecionar todos (Regiões)", key="btn_all_regioes"):
+            st.session_state["ms_regioes"] = regioes
+
+        regioes_sel = st.sidebar.multiselect(
+            "Região de saúde",
+            regioes,
+            key="ms_regioes",
+        )
 
     # ---- Município ----
     cidade_col = "cidade_moradia" if "cidade_moradia" in df.columns else None
@@ -795,15 +817,35 @@ def build_filters(df: pd.DataFrame):
     if cidade_col:
         cidade_vals = sorted(df[cidade_col].dropna().astype(str).unique().tolist())
         default_cidades = cidade_vals if len(cidade_vals) <= 25 else cidade_vals[:25]
+        # inicializa seleção (default = amostra)
+        if "ms_cidades" not in st.session_state:
+            st.session_state["ms_cidades"] = default_cidades
+
+        if st.sidebar.button("Selecionar todos (Municípios)", key="btn_all_cidades"):
+            st.session_state["ms_cidades"] = cidade_vals
+
         cidades_sel = st.sidebar.multiselect(
-            "Município de residência (amostra)", cidade_vals, default=default_cidades
+            "Município de residência (amostra)",
+            cidade_vals,
+            key="ms_cidades",
         )
 
     # ---- Sexo ----
     sexo_sel = []
     if "sexo" in df.columns:
         sexos = sorted(df["sexo"].dropna().astype(str).unique().tolist())
-        sexo_sel = st.sidebar.multiselect("Sexo", sexos, default=sexos)
+        # inicializa seleção (default = todos)
+        if "ms_sexos" not in st.session_state:
+            st.session_state["ms_sexos"] = sexos
+
+        if st.sidebar.button("Selecionar todos (Sexo)", key="btn_all_sexos"):
+            st.session_state["ms_sexos"] = sexos
+
+        sexo_sel = st.sidebar.multiselect(
+            "Sexo",
+            sexos,
+            key="ms_sexos",
+        )
 
     return {
         "periodo": periodo_sel,
