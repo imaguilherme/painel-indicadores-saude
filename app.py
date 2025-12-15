@@ -689,8 +689,22 @@ def mortalidade_30d_pos_alta(df: pd.DataFrame):
 
 
 def definir_base_para_indicador(indicador, df_f, df_pac):
+    """Define a base de linhas que alimenta os gráficos conforme o indicador.
+
+    Importante: para *quantidades*, evitamos contagem por linhas duplicadas.
+    - Pacientes: 1 linha por prontuário (df_pac).
+    - Internações: 1 linha por código de internação (df_f deduplicado).
+    """
     if indicador == "Quantidade de pacientes":
+        # 1 linha por paciente
         return df_pac.copy()
+
+    if indicador == "Quantidade de internações":
+        # Garante 1 linha por internação (evita supercontagem caso existam duplicatas)
+        if df_f is not None and "codigo_internacao" in df_f.columns:
+            return df_f.drop_duplicates(subset=["codigo_internacao"]).copy()
+        return df_f.copy()
+
     return df_f.copy()
 
 
