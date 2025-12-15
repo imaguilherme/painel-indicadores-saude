@@ -96,14 +96,23 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
             include_lowest=True,
         )
 
-    # Deduplicação básica
-    keys = [
-        c
-        for c in ["codigo_internacao", "prontuario_anonimo", "data_internacao", "data_alta"]
-        if c in df.columns
-    ]
-    if keys:
-        df = df.drop_duplicates(subset=keys)
+    # Deduplicação (evita colapsar internações diferentes quando CODIGO_INTERNAÇÃO estiver ausente)
+    if "codigo_internacao" in df.columns:
+        # Se houver código de internação, ele é a chave principal
+        mask = df["codigo_internacao"].notna() & (df["codigo_internacao"].astype(str).str.strip() != "")
+        df_com = df.loc[mask].drop_duplicates(subset=["codigo_internacao"])
+        # Para linhas sem código, usa combinação de chaves disponíveis
+        fallback_keys = [c for c in ["prontuario_anonimo", "data_internacao", "data_alta"] if c in df.columns]
+        if fallback_keys:
+            df_sem = df.loc[~mask].drop_duplicates(subset=fallback_keys)
+        else:
+            df_sem = df.loc[~mask].copy()
+        df = pd.concat([df_com, df_sem], ignore_index=True)
+    else:
+        # fallback geral
+        keys = [c for c in ["prontuario_anonimo", "data_internacao", "data_alta"] if c in df.columns]
+        if keys:
+            df = df.drop_duplicates(subset=keys)
 
     return df
 
@@ -135,46 +144,123 @@ def load_duckdb(csv_paths):
     make_view("proced", proc)
     make_view("cids", cti)
 
-    con.execute(
-        """
-        CREATE VIEW evolu_n AS
-        SELECT
-            lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            *
-        FROM evolu;
+    # --- Detecta colunas para montar joins/normalização de forma robusta ---
+    def _cols(view_name: str):
+        return set(con.execute(f"PRAGMA table_info('{view_name}')").df()["name"].str.lower())
 
-        CREATE VIEW cids_n AS
-        SELECT
-            lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            *
-        FROM cids;
+    cols_evo = _cols("evolu")
+    cols_proc = _cols("proced")
+    cols_cids = _cols("cids")
 
-        CREATE VIEW proc_n AS
-        SELECT
-            lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            *
-        FROM proced;
+    evo_has_ci = "codigo_internacao" in cols_evo
+    proc_has_ci = "codigo_internacao" in cols_proc
+    cids_has_ci = "codigo_internacao" in cols_cids
 
-        CREATE VIEW proc_agg AS
-        SELECT
-            prontuario_anonimo,
-            COUNT(*)                        AS n_proced,
-            ANY_VALUE(codigo_procedimento)  AS proc_prim,
-            ANY_VALUE(procedimento)         AS proc_nome_prim,
-            ANY_VALUE(natureza_agend)       AS natureza_agend
-        FROM proc_n
-        GROUP BY prontuario_anonimo;
+    # Views normalizadas (com REPLACE apenas se a coluna existir)
+    if evo_has_ci:
+        con.execute("""
+            CREATE VIEW evolu_n AS
+            SELECT * REPLACE (
+                lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
+                trim(CAST(codigo_internacao AS VARCHAR))         AS codigo_internacao
+            )
+            FROM evolu;
+        """)
+    else:
+        con.execute("""
+            CREATE VIEW evolu_n AS
+            SELECT * REPLACE (
+                lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo
+            )
+            FROM evolu;
+        """)
 
+    if cids_has_ci:
+        con.execute("""
+            CREATE VIEW cids_n AS
+            SELECT * REPLACE (
+                lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
+                trim(CAST(codigo_internacao AS VARCHAR))         AS codigo_internacao
+            )
+            FROM cids;
+        """)
+    else:
+        con.execute("""
+            CREATE VIEW cids_n AS
+            SELECT * REPLACE (
+                lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo
+            )
+            FROM cids;
+        """)
+
+    if proc_has_ci:
+        con.execute("""
+            CREATE VIEW proc_n AS
+            SELECT * REPLACE (
+                lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
+                trim(CAST(codigo_internacao AS VARCHAR))         AS codigo_internacao
+            )
+            FROM proced;
+        """)
+    else:
+        con.execute("""
+            CREATE VIEW proc_n AS
+            SELECT * REPLACE (
+                lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo
+            )
+            FROM proced;
+        """)
+
+    # Agrega PROCEDIMENTOS por internação se possível (senão, por paciente)
+    if proc_has_ci:
+        con.execute("""
+            CREATE VIEW proc_agg AS
+            SELECT
+                prontuario_anonimo,
+                codigo_internacao,
+                COUNT(*)                       AS n_proced,
+                ANY_VALUE(codigo_procedimento) AS proc_prim,
+                ANY_VALUE(procedimento)        AS proc_nome_prim,
+                ANY_VALUE(natureza_agend)      AS natureza_agend
+            FROM proc_n
+            GROUP BY prontuario_anonimo, codigo_internacao;
+        """)
+    else:
+        con.execute("""
+            CREATE VIEW proc_agg AS
+            SELECT
+                prontuario_anonimo,
+                COUNT(*)                       AS n_proced,
+                ANY_VALUE(codigo_procedimento) AS proc_prim,
+                ANY_VALUE(procedimento)        AS proc_nome_prim,
+                ANY_VALUE(natureza_agend)      AS natureza_agend
+            FROM proc_n
+            GROUP BY prontuario_anonimo;
+        """)
+
+    # Monta dataset com o melhor conjunto de chaves disponível
+    join_keys = "prontuario_anonimo"
+    if evo_has_ci and proc_has_ci:
+        join_keys = "prontuario_anonimo, codigo_internacao"
+
+    join_keys_cids = "prontuario_anonimo"
+    if evo_has_ci and cids_has_ci:
+        join_keys_cids = "prontuario_anonimo, codigo_internacao"
+
+    # Cids/proc podem ter ou não as chaves extras; EXCLUDE depende disso:
+    exclude_cids = "prontuario_anonimo, codigo_internacao" if ("codigo_internacao" in join_keys_cids) else "prontuario_anonimo"
+    exclude_proc = "prontuario_anonimo, codigo_internacao" if ("codigo_internacao" in join_keys) else "prontuario_anonimo"
+
+    con.execute(f"""
         CREATE VIEW dataset AS
         SELECT
             e.*,
-            c.* EXCLUDE (prontuario_anonimo),
-            p.*
+            c.* EXCLUDE ({exclude_cids}),
+            p.* EXCLUDE ({exclude_proc})
         FROM evolu_n e
-        LEFT JOIN cids_n  c USING (prontuario_anonimo)
-        LEFT JOIN proc_agg p USING (prontuario_anonimo);
-        """
-    )
+        LEFT JOIN cids_n   c USING ({join_keys_cids})
+        LEFT JOIN proc_agg p USING ({join_keys});
+    """)
     return con
 
 
@@ -520,11 +606,20 @@ def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
         if "prontuario_anonimo" in df_pacientes
         else np.nan
     )
-    internacoes = (
-        df_eventos["codigo_internacao"].nunique()
-        if "codigo_internacao" in df_eventos
-        else len(df_eventos)
-    )
+    internacoes = np.nan
+    if "codigo_internacao" in df_eventos:
+        cod = df_eventos["codigo_internacao"]
+        # Se houver internações sem código, conta cada linha faltante como uma internação distinta (após dedup)
+        if cod.isna().any() or (cod.astype(str).str.strip() == "").any():
+            cod_norm = cod.astype("string")
+            miss_mask = cod_norm.isna() | (cod_norm.str.strip() == "")
+            cod_norm = cod_norm.fillna("")
+            cod_norm.loc[miss_mask] = "__SEM_CODIGO__" + df_eventos.index.astype(str)
+            internacoes = cod_norm.nunique(dropna=True)
+        else:
+            internacoes = cod.nunique(dropna=True)
+    else:
+        internacoes = len(df_eventos)
     tmi = (
         df_eventos["dias_permanencia"]
         .replace([np.inf, -np.inf], np.nan)
