@@ -748,13 +748,16 @@ def build_filters(df: pd.DataFrame):
     if "data_internacao" in df.columns:
         min_dt = pd.to_datetime(df["data_internacao"]).min().date()
         max_dt = pd.to_datetime(df["data_internacao"]).max().date()
-        periodo_sel = st.sidebar.date_input(
-            "Período da internação",
-            value=(min_dt, max_dt),
-            format="DD/MM/YYYY",
-        )
 
-        # garantir tupla (ini, fim)
+        with st.sidebar.container(border=True):
+            st.markdown("**Período da internação**")
+            periodo_sel = st.date_input(
+                "Período da internação",
+                value=(min_dt, max_dt),
+                format="DD/MM/YYYY",
+                label_visibility="collapsed",
+            )
+
         if not isinstance(periodo_sel, (list, tuple)):
             periodo_sel = (periodo_sel, periodo_sel)
     else:
@@ -765,9 +768,17 @@ def build_filters(df: pd.DataFrame):
         idade_min, idade_max = int(np.nanmin(df["idade"])), int(np.nanmax(df["idade"]))
     else:
         idade_min, idade_max = 0, 120
-    idade_sel = st.sidebar.slider(
-        "Idade", min_value=0, max_value=max(idade_max, 1), value=(idade_min, idade_max), step=1
-    )
+
+    with st.sidebar.container(border=True):
+        st.markdown("**Idade**")
+        idade_sel = st.slider(
+            "Idade",
+            min_value=0,
+            max_value=max(idade_max, 1),
+            value=(idade_min, idade_max),
+            step=1,
+            label_visibility="collapsed",
+        )
 
     # ---- Estado ----
     estado_col = next(
@@ -777,18 +788,19 @@ def build_filters(df: pd.DataFrame):
     estados_sel = []
     if estado_col:
         estados = sorted(df[estado_col].dropna().astype(str).unique().tolist())
-        # inicializa seleção (default = todos)
-        if "ms_estados" not in st.session_state:
-            st.session_state["ms_estados"] = estados
 
-        if st.sidebar.button("Selecionar todos (Estados)", key="btn_all_estados"):
-            st.session_state["ms_estados"] = estados
+        with st.sidebar.container(border=True):
+            st.markdown("**Estado de residência**")
+            if st.button("Selecionar todos (Estados)", key="btn_all_estados", use_container_width=True):
+                st.session_state["ms_estados"] = estados
 
-        estados_sel = st.sidebar.multiselect(
-            "Estado de residência",
-            estados,
-            key="ms_estados",
-        )
+            estados_sel = st.multiselect(
+                "Estado de residência",
+                estados,
+                default=estados,
+                key="ms_estados",
+                label_visibility="collapsed",
+            )
 
     # ---- Região de saúde ----
     regiao_col = next(
@@ -798,18 +810,19 @@ def build_filters(df: pd.DataFrame):
     regioes_sel = []
     if regiao_col:
         regioes = sorted(df[regiao_col].dropna().astype(str).unique().tolist())
-        # inicializa seleção (default = todos)
-        if "ms_regioes" not in st.session_state:
-            st.session_state["ms_regioes"] = regioes
 
-        if st.sidebar.button("Selecionar todos (Regiões)", key="btn_all_regioes"):
-            st.session_state["ms_regioes"] = regioes
+        with st.sidebar.container(border=True):
+            st.markdown("**Região de saúde**")
+            if st.button("Selecionar todos (Regiões)", key="btn_all_regioes", use_container_width=True):
+                st.session_state["ms_regioes"] = regioes
 
-        regioes_sel = st.sidebar.multiselect(
-            "Região de saúde",
-            regioes,
-            key="ms_regioes",
-        )
+            regioes_sel = st.multiselect(
+                "Região de saúde",
+                regioes,
+                default=regioes,
+                key="ms_regioes",
+                label_visibility="collapsed",
+            )
 
     # ---- Município ----
     cidade_col = "cidade_moradia" if "cidade_moradia" in df.columns else None
@@ -817,35 +830,37 @@ def build_filters(df: pd.DataFrame):
     if cidade_col:
         cidade_vals = sorted(df[cidade_col].dropna().astype(str).unique().tolist())
         default_cidades = cidade_vals if len(cidade_vals) <= 25 else cidade_vals[:25]
-        # inicializa seleção (default = amostra)
-        if "ms_cidades" not in st.session_state:
-            st.session_state["ms_cidades"] = default_cidades
 
-        if st.sidebar.button("Selecionar todos (Municípios)", key="btn_all_cidades"):
-            st.session_state["ms_cidades"] = cidade_vals
+        with st.sidebar.container(border=True):
+            st.markdown("**Município de residência (amostra)**")
+            if st.button("Selecionar todos (Municípios)", key="btn_all_cidades", use_container_width=True):
+                st.session_state["ms_cidades"] = cidade_vals
 
-        cidades_sel = st.sidebar.multiselect(
-            "Município de residência (amostra)",
-            cidade_vals,
-            key="ms_cidades",
-        )
+            cidades_sel = st.multiselect(
+                "Município de residência (amostra)",
+                cidade_vals,
+                default=default_cidades,
+                key="ms_cidades",
+                label_visibility="collapsed",
+            )
 
     # ---- Sexo ----
     sexo_sel = []
     if "sexo" in df.columns:
         sexos = sorted(df["sexo"].dropna().astype(str).unique().tolist())
-        # inicializa seleção (default = todos)
-        if "ms_sexos" not in st.session_state:
-            st.session_state["ms_sexos"] = sexos
 
-        if st.sidebar.button("Selecionar todos (Sexo)", key="btn_all_sexos"):
-            st.session_state["ms_sexos"] = sexos
+        with st.sidebar.container(border=True):
+            st.markdown("**Sexo**")
+            if st.button("Selecionar todos (Sexo)", key="btn_all_sexos", use_container_width=True):
+                st.session_state["ms_sexos"] = sexos
 
-        sexo_sel = st.sidebar.multiselect(
-            "Sexo",
-            sexos,
-            key="ms_sexos",
-        )
+            sexo_sel = st.multiselect(
+                "Sexo",
+                sexos,
+                default=sexos,
+                key="ms_sexos",
+                label_visibility="collapsed",
+            )
 
     return {
         "periodo": periodo_sel,
@@ -855,7 +870,6 @@ def build_filters(df: pd.DataFrame):
         "cidade": cidades_sel,
         "sexo": sexo_sel,
     }
-
 
 def apply_filters(df: pd.DataFrame, f):
     # Período
