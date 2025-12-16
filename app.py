@@ -775,11 +775,11 @@ def build_filters(df: pd.DataFrame):
     def _multiselect_com_todos(titulo: str, opcoes: list, key: str, default=None, help_text: str | None = None):
         """Multiselect com a opção 'Selecionar todos' DENTRO da lista.
 
-        - '✅ Selecionar todos' aparece como um item no dropdown.
+        - 'Selecionar todos' aparece como um item no dropdown.
         - Quando selecionado, marca todos os itens.
         - Se o usuário desmarcar qualquer item após isso, o 'Selecionar todos' é removido automaticamente.
         """
-        all_token = "✅ Selecionar todos"
+        all_token = "Selecionar todos"
         prev_key = f"__prev_{key}"
 
         opcoes = [str(x) for x in opcoes]
