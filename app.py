@@ -775,11 +775,11 @@ def build_filters(df: pd.DataFrame):
     def _multiselect_com_todos(titulo: str, opcoes: list, key: str, default=None, help_text: str | None = None):
         """Multiselect com a opção 'Selecionar todos' DENTRO da lista.
 
-        - 'Selecionar todos' aparece como um item no dropdown.
+        - '✅ Selecionar todos' aparece como um item no dropdown.
         - Quando selecionado, marca todos os itens.
         - Se o usuário desmarcar qualquer item após isso, o 'Selecionar todos' é removido automaticamente.
         """
-        all_token = "Selecionar todos"
+        all_token = "✅ Selecionar todos"
         prev_key = f"__prev_{key}"
 
         opcoes = [str(x) for x in opcoes]
@@ -1246,11 +1246,28 @@ def calcular_indicador_ano(nome, df_eventos_ano: pd.DataFrame, df_pacientes_ano:
     return np.nan
 
 
+# --------------------------------------------------------------------
+# FORMATAÇÃO PT-BR
+# --------------------------------------------------------------------
+def fmt_ptbr(v: float, dec: int = 0) -> str:
+    """Formata número no padrão pt-BR: milhar com '.' e decimal com ','."""
+    if v is None:
+        return '—'
+    try:
+        s = f"{float(v):,.{dec}f}"
+    except Exception:
+        return '—'
+    return s.replace(',', 'X').replace('.', ',').replace('X', '.')
+
 valor_ind = calcular_indicador(indicador_selecionado)
-if "%" in indicador_selecionado:
-    texto_valor = f"{valor_ind:.2f}%" if pd.notna(valor_ind) else "—"
+if indicador_selecionado in indicadores_percentual:
+    texto_valor = (fmt_ptbr(valor_ind, 2) + '%') if pd.notna(valor_ind) else '—'
+elif indicador_selecionado in indicadores_media:
+    texto_valor = fmt_ptbr(valor_ind, 1) if pd.notna(valor_ind) else '—'
+elif indicador_selecionado in indicadores_quantidade:
+    texto_valor = fmt_ptbr(round(float(valor_ind)), 0) if pd.notna(valor_ind) else '—'
 else:
-    texto_valor = f"{valor_ind:,.2f}".replace(",", ".") if pd.notna(valor_ind) else "—"
+    texto_valor = fmt_ptbr(valor_ind, 2) if pd.notna(valor_ind) else '—'
 
 
 # --------------------------------------------------------------------
@@ -1258,15 +1275,16 @@ else:
 # --------------------------------------------------------------------
 def format_val_for_card(indicador: str, v: float) -> str:
     if pd.isna(v):
-        return "—"
+        return '—'
     if indicador in indicadores_percentual:
-        return f"{v:.2f}%"
+        return fmt_ptbr(v, 2) + '%'
     if indicador in indicadores_media:
-        return f"{v:.1f}"
+        return fmt_ptbr(v, 1)
     # quantidade
     if abs(v) >= 1000:
-        return f"{v/1000:.2f} Mil"
-    return f"{v:,.0f}".replace(",", ".")
+        mil = float(v) / 1000.0
+        return fmt_ptbr(mil, 2) + ' Mil'
+    return fmt_ptbr(v, 0)
 
 
 def card_bar_fig(
