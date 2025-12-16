@@ -137,42 +137,57 @@ def load_duckdb(csv_paths):
 
     con.execute(
         """
-        CREATE VIEW evolu_n AS
+                CREATE VIEW evolu_n AS
         SELECT
             lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            *
+            * EXCLUDE (prontuario_anonimo)
         FROM evolu;
 
         CREATE VIEW cids_n AS
         SELECT
             lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            *
+            * EXCLUDE (prontuario_anonimo)
         FROM cids;
 
+        -- Base de procedimentos com código de internação (normalizado)
         CREATE VIEW proc_n AS
         SELECT
             lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            *
+            COALESCE(
+                NULLIF(trim(CAST(codigo_internacao AS VARCHAR)), ''),
+                'SEM_' || lower(trim(CAST(prontuario_anonimo AS VARCHAR))) || '_' ||
+                COALESCE(CAST(CAST(data_internacao AS DATE) AS VARCHAR), 'NA') || '_' ||
+                COALESCE(CAST(CAST(data_alta AS DATE) AS VARCHAR), 'NA')
+            ) AS codigo_internacao,
+            * EXCLUDE (prontuario_anonimo, codigo_internacao)
         FROM proced;
 
-        CREATE VIEW proc_agg AS
+        -- Agregação por internação (1 linha por CODIGO_INTERNACAO)
+        CREATE VIEW internacoes_base AS
         SELECT
             prontuario_anonimo,
-            COUNT(*)                        AS n_proced,
-            ANY_VALUE(codigo_procedimento)  AS proc_prim,
-            ANY_VALUE(procedimento)         AS proc_nome_prim,
-            ANY_VALUE(natureza_agend)       AS natureza_agend
+            codigo_internacao,
+            MIN(data_internacao)             AS data_internacao,
+            MIN(data_cirurgia)               AS data_cirurgia_min,
+            MAX(data_cirurgia)               AS data_cirurgia_max,
+            MAX(data_alta)                   AS data_alta,
+            MAX(data_obito)                  AS data_obito,
+            ANY_VALUE(natureza_agend)        AS natureza_agend,
+            COUNT(*)                         AS n_proced,
+            ANY_VALUE(codigo_procedimento)   AS proc_prim,
+            ANY_VALUE(procedimento)          AS proc_nome_prim
         FROM proc_n
-        GROUP BY prontuario_anonimo;
+        GROUP BY prontuario_anonimo, codigo_internacao;
 
+        -- Dataset final (baseado em internações)
         CREATE VIEW dataset AS
         SELECT
-            e.*,
-            c.* EXCLUDE (prontuario_anonimo),
-            p.*
-        FROM evolu_n e
-        LEFT JOIN cids_n  c USING (prontuario_anonimo)
-        LEFT JOIN proc_agg p USING (prontuario_anonimo);
+            i.*,
+            e.* EXCLUDE (prontuario_anonimo),
+            c.* EXCLUDE (prontuario_anonimo)
+        FROM internacoes_base i
+        LEFT JOIN evolu_n e USING (prontuario_anonimo)
+        LEFT JOIN cids_n  c USING (prontuario_anonimo);
         """
     )
     return con
@@ -757,54 +772,14 @@ def build_filters(df: pd.DataFrame):
 
     st.sidebar.header("Filtros")
 
-    def _multiselect_com_todos(titulo, opcoes, key, default=None, help_text=None):
-    # Normaliza opções para string, remove nulos e espaços
-    opcoes_norm = [str(x).strip() for x in opcoes if pd.notna(x)]
-    opcoes_norm = [x for x in opcoes_norm if x != ""]
+    def _multiselect_com_todos(titulo: str, opcoes: list, key: str, default=None, help_text: str | None = None):
+        """Multiselect com a opção 'Selecionar todos' DENTRO da lista.
 
-    marcador = "✅ Selecionar todos"
-    options = [marcador] + opcoes_norm
-
-    # Default seguro (só o que existe em options)
-    if default is None:
-        default_norm = opcoes_norm
-    else:
-        default_norm = [str(x).strip() for x in default if pd.notna(x)]
-        default_norm = [x for x in default_norm if x in options]  # evita erro
-
-        # se default vier vazio, cai para "todos"
-        if len(default_norm) == 0:
-            default_norm = opcoes_norm
-
-    # Se já tem estado salvo no session_state, usa ele (também filtrando)
-    if key in st.session_state:
-        ss = st.session_state.get(key, [])
-        ss_norm = [str(x).strip() for x in ss if pd.notna(x)]
-        ss_norm = [x for x in ss_norm if x in options]
-        st.session_state[key] = ss_norm
-
-    sel = st.multiselect(
-        titulo,
-        options,
-        default=default_norm,
-        key=key,
-        help=help_text,
-    )
-
-    # Se marcou "Selecionar todos", retorna todas as opções reais
-    if marcador in sel:
-        st.session_state[key] = opcoes_norm
-        return opcoes_norm
-
-    return sel
-
-
-
-        - '✅ Selecionar todos' aparece como um item no dropdown.
+        - 'Selecionar todos' aparece como um item no dropdown.
         - Quando selecionado, marca todos os itens.
         - Se o usuário desmarcar qualquer item após isso, o 'Selecionar todos' é removido automaticamente.
         """
-        all_token = "✅ Selecionar todos"
+        all_token = "Selecionar todos"
         prev_key = f"__prev_{key}"
 
         opcoes = [str(x) for x in opcoes]
