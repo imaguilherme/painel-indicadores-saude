@@ -137,57 +137,42 @@ def load_duckdb(csv_paths):
 
     con.execute(
         """
-                CREATE VIEW evolu_n AS
+        CREATE VIEW evolu_n AS
         SELECT
             lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            * EXCLUDE (prontuario_anonimo)
+            *
         FROM evolu;
 
         CREATE VIEW cids_n AS
         SELECT
             lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            * EXCLUDE (prontuario_anonimo)
+            *
         FROM cids;
 
-        -- Base de procedimentos com código de internação (normalizado)
         CREATE VIEW proc_n AS
         SELECT
             lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
-            COALESCE(
-                NULLIF(trim(CAST(codigo_internacao AS VARCHAR)), ''),
-                'SEM_' || lower(trim(CAST(prontuario_anonimo AS VARCHAR))) || '_' ||
-                COALESCE(CAST(CAST(data_internacao AS DATE) AS VARCHAR), 'NA') || '_' ||
-                COALESCE(CAST(CAST(data_alta AS DATE) AS VARCHAR), 'NA')
-            ) AS codigo_internacao,
-            * EXCLUDE (prontuario_anonimo, codigo_internacao)
+            *
         FROM proced;
 
-        -- Agregação por internação (1 linha por CODIGO_INTERNACAO)
-        CREATE VIEW internacoes_base AS
+        CREATE VIEW proc_agg AS
         SELECT
             prontuario_anonimo,
-            codigo_internacao,
-            MIN(data_internacao)             AS data_internacao,
-            MIN(data_cirurgia)               AS data_cirurgia_min,
-            MAX(data_cirurgia)               AS data_cirurgia_max,
-            MAX(data_alta)                   AS data_alta,
-            MAX(data_obito)                  AS data_obito,
-            ANY_VALUE(natureza_agend)        AS natureza_agend,
-            COUNT(*)                         AS n_proced,
-            ANY_VALUE(codigo_procedimento)   AS proc_prim,
-            ANY_VALUE(procedimento)          AS proc_nome_prim
+            COUNT(*)                        AS n_proced,
+            ANY_VALUE(codigo_procedimento)  AS proc_prim,
+            ANY_VALUE(procedimento)         AS proc_nome_prim,
+            ANY_VALUE(natureza_agend)       AS natureza_agend
         FROM proc_n
-        GROUP BY prontuario_anonimo, codigo_internacao;
+        GROUP BY prontuario_anonimo;
 
-        -- Dataset final (baseado em internações)
         CREATE VIEW dataset AS
         SELECT
-            i.*,
-            e.* EXCLUDE (prontuario_anonimo),
-            c.* EXCLUDE (prontuario_anonimo)
-        FROM internacoes_base i
-        LEFT JOIN evolu_n e USING (prontuario_anonimo)
-        LEFT JOIN cids_n  c USING (prontuario_anonimo);
+            e.*,
+            c.* EXCLUDE (prontuario_anonimo),
+            p.*
+        FROM evolu_n e
+        LEFT JOIN cids_n  c USING (prontuario_anonimo)
+        LEFT JOIN proc_agg p USING (prontuario_anonimo);
         """
     )
     return con
@@ -772,8 +757,48 @@ def build_filters(df: pd.DataFrame):
 
     st.sidebar.header("Filtros")
 
-    def _multiselect_com_todos(titulo: str, opcoes: list, key: str, default=None, help_text: str | None = None):
-        """Multiselect com a opção 'Selecionar todos' DENTRO da lista.
+    def _multiselect_com_todos(titulo, opcoes, key, default=None, help_text=None):
+    # Normaliza opções para string, remove nulos e espaços
+    opcoes_norm = [str(x).strip() for x in opcoes if pd.notna(x)]
+    opcoes_norm = [x for x in opcoes_norm if x != ""]
+
+    marcador = "✅ Selecionar todos"
+    options = [marcador] + opcoes_norm
+
+    # Default seguro (só o que existe em options)
+    if default is None:
+        default_norm = opcoes_norm
+    else:
+        default_norm = [str(x).strip() for x in default if pd.notna(x)]
+        default_norm = [x for x in default_norm if x in options]  # evita erro
+
+        # se default vier vazio, cai para "todos"
+        if len(default_norm) == 0:
+            default_norm = opcoes_norm
+
+    # Se já tem estado salvo no session_state, usa ele (também filtrando)
+    if key in st.session_state:
+        ss = st.session_state.get(key, [])
+        ss_norm = [str(x).strip() for x in ss if pd.notna(x)]
+        ss_norm = [x for x in ss_norm if x in options]
+        st.session_state[key] = ss_norm
+
+    sel = st.multiselect(
+        titulo,
+        options,
+        default=default_norm,
+        key=key,
+        help=help_text,
+    )
+
+    # Se marcou "Selecionar todos", retorna todas as opções reais
+    if marcador in sel:
+        st.session_state[key] = opcoes_norm
+        return opcoes_norm
+
+    return sel
+
+
 
         - '✅ Selecionar todos' aparece como um item no dropdown.
         - Quando selecionado, marca todos os itens.
@@ -1246,28 +1271,11 @@ def calcular_indicador_ano(nome, df_eventos_ano: pd.DataFrame, df_pacientes_ano:
     return np.nan
 
 
-# --------------------------------------------------------------------
-# FORMATAÇÃO PT-BR
-# --------------------------------------------------------------------
-def fmt_ptbr(v: float, dec: int = 0) -> str:
-    """Formata número no padrão pt-BR: milhar com '.' e decimal com ','."""
-    if v is None:
-        return '—'
-    try:
-        s = f"{float(v):,.{dec}f}"
-    except Exception:
-        return '—'
-    return s.replace(',', 'X').replace('.', ',').replace('X', '.')
-
 valor_ind = calcular_indicador(indicador_selecionado)
-if indicador_selecionado in indicadores_percentual:
-    texto_valor = (fmt_ptbr(valor_ind, 2) + '%') if pd.notna(valor_ind) else '—'
-elif indicador_selecionado in indicadores_media:
-    texto_valor = fmt_ptbr(valor_ind, 1) if pd.notna(valor_ind) else '—'
-elif indicador_selecionado in indicadores_quantidade:
-    texto_valor = fmt_ptbr(round(float(valor_ind)), 0) if pd.notna(valor_ind) else '—'
+if "%" in indicador_selecionado:
+    texto_valor = f"{valor_ind:.2f}%" if pd.notna(valor_ind) else "—"
 else:
-    texto_valor = fmt_ptbr(valor_ind, 2) if pd.notna(valor_ind) else '—'
+    texto_valor = f"{valor_ind:,.2f}".replace(",", ".") if pd.notna(valor_ind) else "—"
 
 
 # --------------------------------------------------------------------
@@ -1275,16 +1283,15 @@ else:
 # --------------------------------------------------------------------
 def format_val_for_card(indicador: str, v: float) -> str:
     if pd.isna(v):
-        return '—'
+        return "—"
     if indicador in indicadores_percentual:
-        return fmt_ptbr(v, 2) + '%'
+        return f"{v:.2f}%"
     if indicador in indicadores_media:
-        return fmt_ptbr(v, 1)
+        return f"{v:.1f}"
     # quantidade
     if abs(v) >= 1000:
-        mil = float(v) / 1000.0
-        return fmt_ptbr(mil, 2) + ' Mil'
-    return fmt_ptbr(v, 0)
+        return f"{v/1000:.2f} Mil"
+    return f"{v:,.0f}".replace(",", ".")
 
 
 def card_bar_fig(
