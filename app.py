@@ -188,6 +188,15 @@ def load_duckdb(csv_paths):
         FROM internacoes_base i
         LEFT JOIN evolu_n e USING (prontuario_anonimo)
         LEFT JOIN cids_n  c USING (prontuario_anonimo);
+
+        -- Base de pacientes (caracterização), independente de ter internação no período
+        CREATE VIEW pacientes_base AS
+        SELECT
+            e.*,
+            c.* EXCLUDE (prontuario_anonimo)
+        FROM evolu_n e
+        LEFT JOIN cids_n c USING (prontuario_anonimo);
+
         """
     )
     return con
@@ -931,9 +940,9 @@ def build_filters(df: pd.DataFrame):
         "sexo": sexo_sel,
     }
 
-def apply_filters(df: pd.DataFrame, f):
+def apply_filters(df: pd.DataFrame, f, include_period: bool = True):
     # Período
-    if "data_internacao" in df.columns and f.get("periodo"):
+    if include_period and "data_internacao" in df.columns and f.get("periodo"):
         ini, fim = f["periodo"]
         ini = pd.to_datetime(ini)
         fim = pd.to_datetime(fim) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
@@ -1024,7 +1033,13 @@ if "df" not in st.session_state:
         cid_df, sigtap_df, geo_df = load_aux_tables()
         df_tmp = enrich_with_aux_tables(df_tmp, cid_df, sigtap_df, geo_df)
 
+        # Base de pacientes (caracterização) para contagem alternativa
+        df_base_tmp = df_from_duckdb(con, "SELECT * FROM pacientes_base")
+        df_base_tmp = _post_load(df_base_tmp)
+        df_base_tmp = enrich_with_aux_tables(df_base_tmp, cid_df, sigtap_df, geo_df)
+
         st.session_state["df"] = df_tmp
+        st.session_state["df_base"] = df_base_tmp
         st.success("Arquivos carregados com sucesso! Painel inicializado.")
 
         try:
@@ -1036,6 +1051,7 @@ if "df" not in st.session_state:
 
 # ------------ Depois de carregado, não mostra mais os uploaders ------------
 df = st.session_state["df"]
+df_base = st.session_state.get("df_base")
 
 if df is None or df.empty:
     st.error("Dataset vazio ou não carregado corretamente.")
@@ -1043,8 +1059,14 @@ if df is None or df.empty:
 
 # Filtros
 f = build_filters(df)
-df_f = apply_filters(df, f)
+df_f = apply_filters(df, f, include_period=True)
+# Para a base de pacientes, aplicamos apenas filtros demográficos (sem período)
+df_base_f = apply_filters(df_base, f, include_period=False) if df_base is not None else None
 df_pac = pacientes_unicos(df_f)
+
+pacientes_base_count = (
+    df_base_f["prontuario_anonimo"].nunique() if (df_base_f is not None and "prontuario_anonimo" in df_base_f.columns) else np.nan
+)
 
 show_active_filters(f)
 st.divider()
@@ -1649,6 +1671,9 @@ with col_dir:
     else:
         st.markdown("<h2 style='text-align:center;'>—</h2>", unsafe_allow_html=True)
     st.caption("Valor do indicador no período filtrado")
+
+    if indicador_selecionado == "Quantidade de pacientes" and pd.notna(pacientes_base_count):
+        st.caption(f"Também na base de caracterização (sem filtro de período): **{int(pacientes_base_count):,}**".replace(",", "."))
 
     st.markdown("---")
 
