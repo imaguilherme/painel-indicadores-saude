@@ -882,7 +882,10 @@ def build_filters(df: pd.DataFrame):
         (c for c in df.columns if c.lower() in ["estado_residencia", "uf_residencia", "uf", "estado", "sigla_uf"]),
         None,
     )
+
     estados_sel = []
+    df_estado = df  # base para filtros em cascata (fallback)
+
     if estado_col:
         estados = sorted(df[estado_col].dropna().astype(str).unique().tolist())
         estados_sel = _multiselect_com_todos(
@@ -892,14 +895,19 @@ def build_filters(df: pd.DataFrame):
             default=estados,
         )
 
-    # ---- Região de saúde ----
+        # aplica recorte por estado para alimentar Região de Saúde e Município
+        if estados_sel:
+            df_estado = df[df[estado_col].isin(estados_sel)]
+
+    # ---- Região de saúde (dependente do Estado) ----
     regiao_col = next(
         (c for c in df.columns if "regiao" in c.lower() and "saud" in c.lower()),
         None,
     )
+
     regioes_sel = []
-    if regiao_col:
-        regioes = sorted(df[regiao_col].dropna().astype(str).unique().tolist())
+    if regiao_col and df_estado is not None and not df_estado.empty:
+        regioes = sorted(df_estado[regiao_col].dropna().astype(str).unique().tolist())
         regioes_sel = _multiselect_com_todos(
             "Região de saúde",
             regioes,
@@ -907,20 +915,25 @@ def build_filters(df: pd.DataFrame):
             default=regioes,
         )
 
-    # ---- Município ----
+    # ---- Município (dependente do Estado e Região de Saúde) ----
     cidade_col = "cidade_moradia" if "cidade_moradia" in df.columns else None
     cidades_sel = []
-    if cidade_col:
-        cidade_vals = sorted(df[cidade_col].dropna().astype(str).unique().tolist())
+
+    df_cidade_base = df_estado
+    if regiao_col and regioes_sel and df_cidade_base is not None and not df_cidade_base.empty:
+        df_cidade_base = df_cidade_base[df_cidade_base[regiao_col].isin(regioes_sel)]
+
+    if cidade_col and df_cidade_base is not None and not df_cidade_base.empty:
+        cidade_vals = sorted(df_cidade_base[cidade_col].dropna().astype(str).unique().tolist())
         default_cidades = cidade_vals if len(cidade_vals) <= 25 else cidade_vals[:25]
         cidades_sel = _multiselect_com_todos(
-            "Município de residência (amostra)",
+            "Município de residência",
             cidade_vals,
             key="ms_cidades",
             default=default_cidades,
         )
 
-    # ---- Sexo ----
+# ---- Sexo ----
     sexo_sel = []
     if "sexo" in df.columns:
         sexos = sorted(df["sexo"].dropna().astype(str).unique().tolist())
