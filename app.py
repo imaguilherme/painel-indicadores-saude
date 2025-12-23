@@ -1289,23 +1289,86 @@ def calcular_indicador_ano(nome, df_eventos_ano: pd.DataFrame, df_pacientes_ano:
     return np.nan
 
 
+def _fmt_int_pt(v) -> str:
+    try:
+        return f"{int(v):,}".replace(",", ".")
+    except Exception:
+        return "—"
+
+
+def indicador_percentual_info(nome: str, df_eventos: pd.DataFrame):
+    """Retorna (pct, numerador, denominador) para indicadores percentuais."""
+    if df_eventos is None or df_eventos.empty:
+        return np.nan, np.nan, np.nan
+
+    if "codigo_internacao" in df_eventos.columns:
+        denom = df_eventos["codigo_internacao"].nunique()
+    else:
+        denom = len(df_eventos)
+
+    if not denom:
+        return np.nan, 0, 0
+
+    if nome == "Internação em UTI (%)":
+        e = marcar_uti_flag(df_eventos.copy())
+        numer = e.loc[e["uti_flag"].fillna(False), "codigo_internacao"].nunique() if "codigo_internacao" in e.columns else int(e["uti_flag"].fillna(False).sum())
+        return (numer / denom * 100.0), numer, denom
+
+    if nome == "Reinternação em até 30 dias do procedimento (%)":
+        e = marcar_reinternacoes(df_eventos.copy())
+        numer = e.loc[e["reint_30d_proc"].fillna(False), "codigo_internacao"].nunique() if "codigo_internacao" in e.columns else int(e["reint_30d_proc"].fillna(False).sum())
+        return (numer / denom * 100.0), numer, denom
+
+    if nome == "Reinternação em até 30 dias da alta (%)":
+        e = marcar_reinternacoes(df_eventos.copy())
+        numer = e.loc[e["reint_30d_alta"].fillna(False), "codigo_internacao"].nunique() if "codigo_internacao" in e.columns else int(e["reint_30d_alta"].fillna(False).sum())
+        return (numer / denom * 100.0), numer, denom
+
+    if nome == "Mortalidade hospitalar (%)":
+        e = marcar_obito_periodo(df_eventos.copy())
+        numer = e.loc[e["obito_no_periodo"].fillna(False), "codigo_internacao"].nunique() if "codigo_internacao" in e.columns else int(e["obito_no_periodo"].fillna(False).sum())
+        return (numer / denom * 100.0), numer, denom
+
+    if nome == "Mortalidade em até 30 dias do procedimento (%)":
+        e = marcar_mort_30d_proc(df_eventos.copy())
+        numer = e.loc[e["obito_30d_proc"].fillna(False), "codigo_internacao"].nunique() if "codigo_internacao" in e.columns else int(e["obito_30d_proc"].fillna(False).sum())
+        return (numer / denom * 100.0), numer, denom
+
+    if nome == "Mortalidade em até 30 dias da alta (%)":
+        e = marcar_mort_30d_alta(df_eventos.copy())
+        numer = e.loc[e["obito_30d_alta"].fillna(False), "codigo_internacao"].nunique() if "codigo_internacao" in e.columns else int(e["obito_30d_alta"].fillna(False).sum())
+        return (numer / denom * 100.0), numer, denom
+
+    return np.nan, np.nan, np.nan
+
+
+
 valor_ind = calcular_indicador(indicador_selecionado)
+
+# Para percentuais, também mostramos numerador/denominador (quantidade de internações elegíveis)
+pct_numer = pct_denom = np.nan
+if indicador_selecionado in indicadores_percentual:
+    _, pct_numer, pct_denom = indicador_percentual_info(indicador_selecionado, df_f)
 
 if pd.isna(valor_ind):
     texto_valor = "—"
+
 elif indicador_selecionado in [
     "Quantidade de pacientes",
     "Quantidade de internações",
     "Quantidade de procedimentos",
 ]:
-    texto_valor = f"{int(valor_ind):,}".replace(",", ".")
-elif "%" in indicador_selecionado:
-    texto_valor = f"{valor_ind:.2f}%"
+    texto_valor = _fmt_int_pt(valor_ind)
+
+elif indicador_selecionado in indicadores_percentual:
+    if pd.notna(pct_numer) and pd.notna(pct_denom) and pct_denom:
+        texto_valor = f"{valor_ind:.2f}% ({_fmt_int_pt(pct_numer)}/{_fmt_int_pt(pct_denom)})"
+    else:
+        texto_valor = f"{valor_ind:.2f}%"
+
 else:
     # demais indicadores numéricos (médias etc.)
     texto_valor = f"{valor_ind:.2f}".replace(".", ",")
-
-
 # --------------------------------------------------------------------
 # FORMATAÇÃO PARA CARDS
 # --------------------------------------------------------------------
