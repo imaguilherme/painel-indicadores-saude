@@ -1652,8 +1652,8 @@ with col_meio:
 
     st.markdown("---")
 
-    # Procedimentos (amostra)
-    st.subheader("Procedimentos (amostra)")
+    # Procedimentos
+    st.subheader("Procedimentos")
     proc_cols = [
         c
         for c in base_charts.columns
@@ -1683,8 +1683,8 @@ with col_meio:
 
     st.markdown("---")
 
-    # CID (capítulo / grupo) – amostra
-    st.subheader("CID (capítulo / grupo) – amostra")
+    # CID (capítulo / grupo)
+    st.subheader("CID (capítulo / grupo)")
 
     if "cid_grupo" in base_charts.columns and base_charts["cid_grupo"].notna().any():
         top_cid_grp = agrega_para_grafico(
@@ -1795,34 +1795,6 @@ with col_dir:
 
     st.markdown("---")
 
-    # Boxplot – Idade por sexo
-    st.subheader("Boxplot – Idade por sexo")
-
-    if {"idade", "sexo"}.issubset(base_charts.columns):
-        df_box = base_charts.dropna(subset=["idade", "sexo"]).copy()
-        df_box["sexo"] = df_box["sexo"].astype(str).str.strip()
-
-        sexo_color_map = get_sexo_color_map(df_box["sexo"].unique())
-
-        fig_box = px.box(
-            df_box,
-            x="sexo",
-            y="idade",
-            color="sexo",
-            points="all",
-            color_discrete_map=sexo_color_map,
-        )
-
-        fig_box.update_xaxes(title="Sexo")
-        fig_box.update_yaxes(title="Idade (anos)")
-        fig_box.update_layout(
-            height=400,
-            margin=dict(t=40, b=40),
-        )
-
-        st.plotly_chart(fig_box, use_container_width=True)
-    else:
-        st.info("Não há colunas 'idade' e 'sexo' disponíveis para o boxplot.")
 
 # --------------------------------------------------------------------
 # COMPARATIVO TEMPORAL (ANO ou MÊS)
