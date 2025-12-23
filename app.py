@@ -1656,28 +1656,40 @@ with col_meio:
     st.markdown("---")
 
     # Treemap – Estado → Região de Saúde → Município
-    st.subheader("Estado → Região de Saúde → Município de residência")
+st.subheader("Estado → Região de Saúde → Município de residência")
 
-    if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base_charts.columns):
-        df_geo_raw = base_charts.dropna(subset=["cidade_moradia"]).copy()
-        df_geo_plot = agrega_para_grafico(
-            df_geo_raw, ["uf", "regiao_saude", "cidade_moradia"], indicador_selecionado
-        )
-        df_geo_plot["valor"] = df_geo_plot["valor"].clip(lower=0)
-        df_geo_plot["valor_plot"] = np.sqrt(df_geo_plot["valor"])
+if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base_charts.columns):
+    df_geo_raw = base_charts.copy()
 
-        fig = px.treemap(
-            df_geo_plot,
-            path=["uf", "regiao_saude", "cidade_moradia"],
-            values="valor_plot",
-        )
-        fig.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info(
-            "Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis."
-        )
+    # Normaliza textos e evita níveis ausentes no meio da hierarquia (isso causa ValueError no px.treemap)
+    for col in ["uf", "regiao_saude", "cidade_moradia"]:
+        df_geo_raw[col] = df_geo_raw[col].astype("string").str.strip()
+        df_geo_raw[col] = df_geo_raw[col].replace({"": pd.NA})
 
+    # Preenche faltantes para não gerar "non-leaf rows" e prefixa rótulos para evitar colisão de nomes entre níveis
+    df_geo_raw["uf"] = df_geo_raw["uf"].fillna("Sem UF").str.upper()
+    df_geo_raw["regiao_saude"] = df_geo_raw["regiao_saude"].fillna("Sem região de saúde")
+    df_geo_raw["cidade_moradia"] = df_geo_raw["cidade_moradia"].fillna("Sem município")
+
+    df_geo_raw["uf_lbl"] = "UF: " + df_geo_raw["uf"].astype(str)
+    df_geo_raw["regiao_lbl"] = "RS: " + df_geo_raw["regiao_saude"].astype(str)
+    df_geo_raw["cidade_lbl"] = "Mun: " + df_geo_raw["cidade_moradia"].astype(str)
+
+    df_geo_plot = agrega_para_grafico(
+        df_geo_raw, ["uf_lbl", "regiao_lbl", "cidade_lbl"], indicador_selecionado
+    )
+    df_geo_plot["valor"] = df_geo_plot["valor"].clip(lower=0)
+    df_geo_plot["valor_plot"] = np.sqrt(df_geo_plot["valor"])
+
+    fig = px.treemap(
+        df_geo_plot,
+        path=["uf_lbl", "regiao_lbl", "cidade_lbl"],
+        values="valor_plot",
+    )
+    fig.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis.")
 # --------------------------------------------------------------------
 # TERCEIRA COLUNA:
 # Valor do indicador; Boxplot – Idade por sexo
