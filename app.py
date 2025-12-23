@@ -832,6 +832,14 @@ def build_filters(df: pd.DataFrame):
 
         with st.sidebar.container(border=True):
             st.markdown(f"**{titulo}**")
+
+            # Sanitiza seleção atual quando as opções mudam (evita StreamlitAPIException)
+            valid_options = [all_token] + opcoes
+            curr_safe = [x for x in st.session_state.get(key, []) if x in valid_options]
+            prev_safe = [x for x in st.session_state.get(prev_key, []) if x in valid_options]
+            st.session_state[key] = curr_safe
+            st.session_state[prev_key] = prev_safe
+
             st.multiselect(
                 titulo,
                 options=[all_token] + opcoes,
@@ -882,7 +890,10 @@ def build_filters(df: pd.DataFrame):
         (c for c in df.columns if c.lower() in ["estado_residencia", "uf_residencia", "uf", "estado", "sigla_uf"]),
         None,
     )
+
     estados_sel = []
+    df_estado = df  # base para filtros em cascata (fallback)
+
     if estado_col:
         estados = sorted(df[estado_col].dropna().astype(str).unique().tolist())
         estados_sel = _multiselect_com_todos(
@@ -892,20 +903,19 @@ def build_filters(df: pd.DataFrame):
             default=estados,
         )
 
-    
-    # ---- Região de saúde ----
+        # aplica recorte por estado para alimentar Região de Saúde e Município
+        if estados_sel:
+            df_estado = df[df[estado_col].isin(estados_sel)]
+
+    # ---- Região de saúde (dependente do Estado) ----
     regiao_col = next(
         (c for c in df.columns if "regiao" in c.lower() and "saud" in c.lower()),
         None,
     )
-    regioes_sel = []
-    if regiao_col:
-        # Cascata: se houver estado selecionado, restringe regiões àquele(s) estado(s)
-        df_scope_reg = df
-        if estado_col and estados_sel:
-            df_scope_reg = df_scope_reg[df_scope_reg[estado_col].isin(estados_sel)]
 
-        regioes = sorted(df_scope_reg[regiao_col].dropna().astype(str).unique().tolist())
+    regioes_sel = []
+    if regiao_col and df_estado is not None and not df_estado.empty:
+        regioes = sorted(df_estado[regiao_col].dropna().astype(str).unique().tolist())
         regioes_sel = _multiselect_com_todos(
             "Região de saúde",
             regioes,
@@ -913,30 +923,25 @@ def build_filters(df: pd.DataFrame):
             default=regioes,
         )
 
-    
-    # ---- Município ----
+    # ---- Município (dependente do Estado e Região de Saúde) ----
     cidade_col = "cidade_moradia" if "cidade_moradia" in df.columns else None
     cidades_sel = []
-    if cidade_col:
-        # Cascata: restringe municípios por estado e, se selecionada, por região de saúde
-        df_scope_cid = df
-        if estado_col and estados_sel:
-            df_scope_cid = df_scope_cid[df_scope_cid[estado_col].isin(estados_sel)]
-        if regiao_col and regioes_sel:
-            df_scope_cid = df_scope_cid[df_scope_cid[regiao_col].isin(regioes_sel)]
 
-        cidade_vals = sorted(df_scope_cid[cidade_col].dropna().astype(str).unique().tolist())
+    df_cidade_base = df_estado
+    if regiao_col and regioes_sel and df_cidade_base is not None and not df_cidade_base.empty:
+        df_cidade_base = df_cidade_base[df_cidade_base[regiao_col].isin(regioes_sel)]
 
-        # Mantém o comportamento de "amostra" por performance, mas agora já filtrado
+    if cidade_col and df_cidade_base is not None and not df_cidade_base.empty:
+        cidade_vals = sorted(df_cidade_base[cidade_col].dropna().astype(str).unique().tolist())
         default_cidades = cidade_vals if len(cidade_vals) <= 25 else cidade_vals[:25]
         cidades_sel = _multiselect_com_todos(
-            "Município de residência (amostra)",
+            "Município de residência",
             cidade_vals,
             key="ms_cidades",
             default=default_cidades,
         )
 
-    # ---- Sexo ----
+# ---- Sexo ----
     sexo_sel = []
     if "sexo" in df.columns:
         sexos = sorted(df["sexo"].dropna().astype(str).unique().tolist())
@@ -1084,6 +1089,7 @@ pacientes_base_count = (
     df_base_f["prontuario_anonimo"].nunique() if (df_base_f is not None and "prontuario_anonimo" in df_base_f.columns) else np.nan
 )
 
+show_active_filters(f)
 st.divider()
 
 modo_perfil = True
@@ -1283,82 +1289,112 @@ def calcular_indicador_ano(nome, df_eventos_ano: pd.DataFrame, df_pacientes_ano:
     return np.nan
 
 
+def _fmt_int_pt(v) -> str:
+    try:
+        return f"{int(v):,}".replace(",", ".")
+    except Exception:
+        return "—"
 
-# --- Numerador (para indicadores percentuais): mostra apenas a QUANTIDADE ---
-def numerador_indicador(indicador: str, df_eventos: pd.DataFrame) -> int | None:
+
+def indicador_percentual_info(nome: str, df_eventos: pd.DataFrame):
+    """Retorna (pct, numerador, denominador) para indicadores percentuais."""
     if df_eventos is None or df_eventos.empty:
-        return 0
+        return np.nan, np.nan, np.nan
 
-    # Base (sempre por internação, quando possível)
     if "codigo_internacao" in df_eventos.columns:
-        base = df_eventos.drop_duplicates(subset=["codigo_internacao"]).copy()
-        id_col = "codigo_internacao"
+        denom = df_eventos["codigo_internacao"].nunique()
     else:
-        base = df_eventos.copy()
-        id_col = None
+        denom = len(df_eventos)
 
-    if indicador == "Internação em UTI (%)":
-        base = marcar_uti_flag(base)
-        mask = base["uti_flag"].fillna(False)
-    elif indicador == "Reinternação em até 30 dias do procedimento (%)":
-        base = marcar_reinternacoes(base)
-        mask = base["reint_30d_proc"].fillna(False)
-    elif indicador == "Reinternação em até 30 dias da alta (%)":
-        base = marcar_reinternacoes(base)
-        mask = base["reint_30d_alta"].fillna(False)
-    elif indicador == "Mortalidade hospitalar (%)":
-        base = marcar_obito_periodo(base)
-        mask = base["obito_no_periodo"].fillna(False)
-    elif indicador == "Mortalidade em até 30 dias do procedimento (%)":
-        base = marcar_mort_30d_proc(base)
-        mask = base["obito_30d_proc"].fillna(False)
-    elif indicador == "Mortalidade em até 30 dias da alta (%)":
-        base = marcar_mort_30d_alta(base)
-        mask = base["obito_30d_alta"].fillna(False)
-    else:
-        return None
+    if not denom:
+        return np.nan, 0, 0
 
-    if id_col:
-        return int(base.loc[mask, id_col].nunique())
-    return int(mask.sum())
+    if nome == "Internação em UTI (%)":
+        e = marcar_uti_flag(df_eventos.copy())
+        numer = e.loc[e["uti_flag"].fillna(False), "codigo_internacao"].nunique() if "codigo_internacao" in e.columns else int(e["uti_flag"].fillna(False).sum())
+        return (numer / denom * 100.0), numer, denom
+
+    if nome == "Reinternação em até 30 dias do procedimento (%)":
+        e = marcar_reinternacoes(df_eventos.copy())
+        numer = e.loc[e["reint_30d_proc"].fillna(False), "codigo_internacao"].nunique() if "codigo_internacao" in e.columns else int(e["reint_30d_proc"].fillna(False).sum())
+        return (numer / denom * 100.0), numer, denom
+
+    if nome == "Reinternação em até 30 dias da alta (%)":
+        e = marcar_reinternacoes(df_eventos.copy())
+        numer = e.loc[e["reint_30d_alta"].fillna(False), "codigo_internacao"].nunique() if "codigo_internacao" in e.columns else int(e["reint_30d_alta"].fillna(False).sum())
+        return (numer / denom * 100.0), numer, denom
+
+    if nome == "Mortalidade hospitalar (%)":
+        e = marcar_obito_periodo(df_eventos.copy())
+        numer = e.loc[e["obito_no_periodo"].fillna(False), "codigo_internacao"].nunique() if "codigo_internacao" in e.columns else int(e["obito_no_periodo"].fillna(False).sum())
+        return (numer / denom * 100.0), numer, denom
+
+    if nome == "Mortalidade em até 30 dias do procedimento (%)":
+        e = marcar_mort_30d_proc(df_eventos.copy())
+        numer = e.loc[e["obito_30d_proc"].fillna(False), "codigo_internacao"].nunique() if "codigo_internacao" in e.columns else int(e["obito_30d_proc"].fillna(False).sum())
+        return (numer / denom * 100.0), numer, denom
+
+    if nome == "Mortalidade em até 30 dias da alta (%)":
+        e = marcar_mort_30d_alta(df_eventos.copy())
+        numer = e.loc[e["obito_30d_alta"].fillna(False), "codigo_internacao"].nunique() if "codigo_internacao" in e.columns else int(e["obito_30d_alta"].fillna(False).sum())
+        return (numer / denom * 100.0), numer, denom
+
+    return np.nan, np.nan, np.nan
+
 
 
 valor_ind = calcular_indicador(indicador_selecionado)
 
-# Texto do card principal (sem casas decimais para quantidades e, nos percentuais, só o numerador)
+# Para percentuais, também mostramos numerador/denominador (quantidade de internações elegíveis)
+pct_numer = pct_denom = np.nan
 if indicador_selecionado in indicadores_percentual:
-    num = numerador_indicador(indicador_selecionado, df_f)
-    texto_valor = f"{int(num):,}".replace(",", ".") if num is not None else "—"
-elif indicador_selecionado in indicadores_quantidade:
-    texto_valor = f"{int(round(valor_ind)):,}".replace(",", ".") if pd.notna(valor_ind) else "—"
+    _, pct_numer, pct_denom = indicador_percentual_info(indicador_selecionado, df_f)
+
+if pd.isna(valor_ind):
+    texto_valor = "—"
+
+elif indicador_selecionado in [
+    "Quantidade de pacientes",
+    "Quantidade de internações",
+    "Quantidade de procedimentos",
+]:
+    texto_valor = _fmt_int_pt(valor_ind)
+
+elif indicador_selecionado in indicadores_percentual:
+    if pd.notna(pct_numer) and pd.notna(pct_denom) and pct_denom:
+        texto_valor = f"{valor_ind:.2f}% ({_fmt_int_pt(pct_numer)}/{_fmt_int_pt(pct_denom)})"
+    else:
+        texto_valor = f"{valor_ind:.2f}%"
+
 else:
-    # médias
-    texto_valor = f"{valor_ind:.2f}".replace(".", ",") if pd.notna(valor_ind) else "—"
-
-
+    # demais indicadores numéricos (médias etc.)
+    texto_valor = f"{valor_ind:.2f}".replace(".", ",")
 # --------------------------------------------------------------------
 # FORMATAÇÃO PARA CARDS
 # --------------------------------------------------------------------
-
 def format_val_for_card(indicador: str, v: float) -> str:
     if pd.isna(v):
         return "—"
 
-    # Percentuais (mantém percentual nos gráficos)
     if indicador in indicadores_percentual:
-        return f"{v:.2f}%".replace(".", ",")
+        return f"{v:.2f}%"
 
-    # Médias
     if indicador in indicadores_media:
-        return f"{v:.1f}".replace(".", ",")
+        return f"{v:.1f}"
 
-    # Quantidades (inteiro, sem casas)
-    v_int = int(round(v))
-    if abs(v_int) >= 1000:
-        mil = int(abs(v_int) / 1000)
-        return f"{mil} Mil" if v_int >= 0 else f"-{mil} Mil"
-    return f"{v_int:,}".replace(",", ".")
+    # Quantidades (inteiros)
+    if indicador in [
+        "Quantidade de pacientes",
+        "Quantidade de internações",
+        "Quantidade de procedimentos",
+    ]:
+        v_int = int(round(float(v)))
+        if abs(v_int) >= 1000:
+            return f"{int(v_int/1000)} Mil"
+        return f"{v_int}"
 
+    # fallback
+    return f"{v:,.0f}".replace(",", ".")
 
 
 def card_bar_fig(
@@ -1705,28 +1741,40 @@ with col_meio:
     st.markdown("---")
 
     # Treemap – Estado → Região de Saúde → Município
-    st.subheader("Estado → Região de Saúde → Município de residência")
+st.subheader("Estado → Região de Saúde → Município de residência")
 
-    if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base_charts.columns):
-        df_geo_raw = base_charts.dropna(subset=["cidade_moradia"]).copy()
-        df_geo_plot = agrega_para_grafico(
-            df_geo_raw, ["uf", "regiao_saude", "cidade_moradia"], indicador_selecionado
-        )
-        df_geo_plot["valor"] = df_geo_plot["valor"].clip(lower=0)
-        df_geo_plot["valor_plot"] = np.sqrt(df_geo_plot["valor"])
+if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base_charts.columns):
+    df_geo_raw = base_charts.copy()
 
-        fig = px.treemap(
-            df_geo_plot,
-            path=["uf", "regiao_saude", "cidade_moradia"],
-            values="valor_plot",
-        )
-        fig.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info(
-            "Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis."
-        )
+    # Normaliza textos e evita níveis ausentes no meio da hierarquia (isso causa ValueError no px.treemap)
+    for col in ["uf", "regiao_saude", "cidade_moradia"]:
+        df_geo_raw[col] = df_geo_raw[col].astype("string").str.strip()
+        df_geo_raw[col] = df_geo_raw[col].replace({"": pd.NA})
 
+    # Preenche faltantes para não gerar "non-leaf rows" e prefixa rótulos para evitar colisão de nomes entre níveis
+    df_geo_raw["uf"] = df_geo_raw["uf"].fillna("Sem UF").str.upper()
+    df_geo_raw["regiao_saude"] = df_geo_raw["regiao_saude"].fillna("Sem região de saúde")
+    df_geo_raw["cidade_moradia"] = df_geo_raw["cidade_moradia"].fillna("Sem município")
+
+    df_geo_raw["uf_lbl"] = "UF: " + df_geo_raw["uf"].astype(str)
+    df_geo_raw["regiao_lbl"] = "RS: " + df_geo_raw["regiao_saude"].astype(str)
+    df_geo_raw["cidade_lbl"] = "Mun: " + df_geo_raw["cidade_moradia"].astype(str)
+
+    df_geo_plot = agrega_para_grafico(
+        df_geo_raw, ["uf_lbl", "regiao_lbl", "cidade_lbl"], indicador_selecionado
+    )
+    df_geo_plot["valor"] = df_geo_plot["valor"].clip(lower=0)
+    df_geo_plot["valor_plot"] = np.sqrt(df_geo_plot["valor"])
+
+    fig = px.treemap(
+        df_geo_plot,
+        path=["uf_lbl", "regiao_lbl", "cidade_lbl"],
+        values="valor_plot",
+    )
+    fig.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis.")
 # --------------------------------------------------------------------
 # TERCEIRA COLUNA:
 # Valor do indicador; Boxplot – Idade por sexo
