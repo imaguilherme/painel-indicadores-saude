@@ -832,6 +832,14 @@ def build_filters(df: pd.DataFrame):
 
         with st.sidebar.container(border=True):
             st.markdown(f"**{titulo}**")
+
+            # Sanitiza seleção atual quando as opções mudam (evita StreamlitAPIException)
+            valid_options = [all_token] + opcoes
+            curr_safe = [x for x in st.session_state.get(key, []) if x in valid_options]
+            prev_safe = [x for x in st.session_state.get(prev_key, []) if x in valid_options]
+            st.session_state[key] = curr_safe
+            st.session_state[prev_key] = prev_safe
+
             st.multiselect(
                 titulo,
                 options=[all_token] + opcoes,
