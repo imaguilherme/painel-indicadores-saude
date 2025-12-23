@@ -1290,10 +1290,20 @@ def calcular_indicador_ano(nome, df_eventos_ano: pd.DataFrame, df_pacientes_ano:
 
 
 valor_ind = calcular_indicador(indicador_selecionado)
-if "%" in indicador_selecionado:
-    texto_valor = f"{valor_ind:.2f}%" if pd.notna(valor_ind) else "—"
+
+if pd.isna(valor_ind):
+    texto_valor = "—"
+elif indicador_selecionado in [
+    "Quantidade de pacientes",
+    "Quantidade de internações",
+    "Quantidade de procedimentos",
+]:
+    texto_valor = f"{int(valor_ind):,}".replace(",", ".")
+elif "%" in indicador_selecionado:
+    texto_valor = f"{valor_ind:.2f}%"
 else:
-    texto_valor = f"{valor_ind:,.2f}".replace(",", ".") if pd.notna(valor_ind) else "—"
+    # demais indicadores numéricos (médias etc.)
+    texto_valor = f"{valor_ind:.2f}".replace(".", ",")
 
 
 # --------------------------------------------------------------------
@@ -1302,13 +1312,25 @@ else:
 def format_val_for_card(indicador: str, v: float) -> str:
     if pd.isna(v):
         return "—"
+
     if indicador in indicadores_percentual:
         return f"{v:.2f}%"
+
     if indicador in indicadores_media:
         return f"{v:.1f}"
-    # quantidade
-    if abs(v) >= 1000:
-        return f"{v/1000:.2f} Mil"
+
+    # Quantidades (inteiros)
+    if indicador in [
+        "Quantidade de pacientes",
+        "Quantidade de internações",
+        "Quantidade de procedimentos",
+    ]:
+        v_int = int(round(float(v)))
+        if abs(v_int) >= 1000:
+            return f"{int(v_int/1000)} Mil"
+        return f"{v_int}"
+
+    # fallback
     return f"{v:,.0f}".replace(",", ".")
 
 
