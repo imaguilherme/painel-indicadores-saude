@@ -1013,7 +1013,7 @@ def show_active_filters(f):
         partes.append("**Região de saúde:** " + ", ".join(f["regiao"]))
     if f["cidade"]:
         partes.append("**Município:** " + ", ".join(f["cidade"]))
-   if f["sexo"]:
+    if f["sexo"]:
         partes.append("**Sexo:** " + ", ".join(f["sexo"]))
     if partes:
         st.markdown("**Filtros ativos:** " + " | ".join(partes))
