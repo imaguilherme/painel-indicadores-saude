@@ -1000,25 +1000,25 @@ def apply_filters(df: pd.DataFrame, f, include_period: bool = True):
     return df
 
 
-#def show_active_filters(f):
-#    partes = []
-#    if f.get("periodo"):
-#        ini, fim = f["periodo"]
-#        partes.append(f"**Período:** {ini.strftime('%d/%m/%Y')} – {fim.strftime('%d/%m/%Y')}")
-#    if f["idade"]:
-#        partes.append(f"**Idade:** {f['idade'][0]}–{f['idade'][1]} anos")
-#    if f["estado"]:
-#        partes.append("**Estado:** " + ", ".join(f["estado"]))
-#    if f["regiao"]:
-#        partes.append("**Região de saúde:** " + ", ".join(f["regiao"]))
-#    if f["cidade"]:
- #       partes.append("**Município:** " + ", ".join(f["cidade"]))
- #   if f["sexo"]:
-#        partes.append("**Sexo:** " + ", ".join(f["sexo"]))
-#    if partes:
-#        st.markdown("**Filtros ativos:** " + " | ".join(partes))
- #   else:
- #       st.markdown("**Filtros ativos:** nenhum filtro aplicado.")
+def show_active_filters(f):
+    partes = []
+    if f.get("periodo"):
+        ini, fim = f["periodo"]
+        partes.append(f"**Período:** {ini.strftime('%d/%m/%Y')} – {fim.strftime('%d/%m/%Y')}")
+    if f["idade"]:
+        partes.append(f"**Idade:** {f['idade'][0]}–{f['idade'][1]} anos")
+    if f["estado"]:
+        partes.append("**Estado:** " + ", ".join(f["estado"]))
+    if f["regiao"]:
+        partes.append("**Região de saúde:** " + ", ".join(f["regiao"]))
+    if f["cidade"]:
+        partes.append("**Município:** " + ", ".join(f["cidade"]))
+   if f["sexo"]:
+        partes.append("**Sexo:** " + ", ".join(f["sexo"]))
+    if partes:
+        st.markdown("**Filtros ativos:** " + " | ".join(partes))
+    else:
+        st.markdown("**Filtros ativos:** nenhum filtro aplicado.")
 
 
 # --------------------------------------------------------------------
