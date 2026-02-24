@@ -15,7 +15,7 @@ st.set_page_config(page_title="Perfil dos Pacientes", layout="wide")
 # --------------------------------------------------------------------
 
 
-def _post_load(df: pd.DataFrame) -> pd.DataFrame:
+/def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [c.lower() for c in df.columns]
 
