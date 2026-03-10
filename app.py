@@ -1,12 +1,10 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
 import duckdb
 import os
-import tempfile
 
 st.set_page_config(page_title="Perfil dos Pacientes", layout="wide")
 
@@ -60,18 +58,18 @@ def _post_load(df: pd.DataFrame) -> pd.DataFrame:
     if "idade" in df.columns:
         bins = [
             -1,
-            0,  # < 1 ano
-            8,  # 01 a 08 anos
-            17,  # 09 a 17 anos
-            26,  # 18 a 26 anos
-            35,  # 27 a 35 anos
-            44,  # 36 a 44 anos
-            53,  # 45 a 53 anos
-            62,  # 54 a 62 anos
-            71,  # 63 a 71 anos
-            80,  # 72 a 80 anos
-            89,  # 81 a 89 anos
-            200,  # 90 anos ou mais
+            0,
+            8,
+            17,
+            26,
+            35,
+            44,
+            53,
+            62,
+            71,
+            80,
+            89,
+            200,
         ]
 
         labels = [
@@ -121,9 +119,9 @@ def load_duckdb(csv_paths):
             SELECT *
             FROM read_csv_auto(
                 '{path_esc}',
-                header      = TRUE,
-                delim       = ',',
-                encoding    = 'utf-8',
+                header = TRUE,
+                delim = ',',
+                encoding = 'utf-8',
                 auto_detect = TRUE,
                 ignore_errors = TRUE,
                 sample_size = -1
@@ -137,7 +135,7 @@ def load_duckdb(csv_paths):
 
     con.execute(
         """
-                CREATE VIEW evolu_n AS
+        CREATE VIEW evolu_n AS
         SELECT
             lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
             * EXCLUDE (prontuario_anonimo)
@@ -149,7 +147,6 @@ def load_duckdb(csv_paths):
             * EXCLUDE (prontuario_anonimo)
         FROM cids;
 
-        -- Base de procedimentos com código de internação (normalizado)
         CREATE VIEW proc_n AS
         SELECT
             lower(trim(CAST(prontuario_anonimo AS VARCHAR))) AS prontuario_anonimo,
@@ -162,7 +159,6 @@ def load_duckdb(csv_paths):
             * EXCLUDE (prontuario_anonimo, codigo_internacao)
         FROM proced;
 
-        -- Agregação por internação (1 linha por CODIGO_INTERNACAO)
         CREATE VIEW internacoes_base AS
         SELECT
             prontuario_anonimo,
@@ -179,7 +175,6 @@ def load_duckdb(csv_paths):
         FROM proc_n
         GROUP BY prontuario_anonimo, codigo_internacao;
 
-        -- Dataset final (baseado em internações)
         CREATE VIEW dataset AS
         SELECT
             i.*,
@@ -187,16 +182,14 @@ def load_duckdb(csv_paths):
             c.* EXCLUDE (prontuario_anonimo)
         FROM internacoes_base i
         LEFT JOIN evolu_n e USING (prontuario_anonimo)
-        LEFT JOIN cids_n  c USING (prontuario_anonimo);
+        LEFT JOIN cids_n c USING (prontuario_anonimo);
 
-        -- Base de pacientes (caracterização), independente de ter internação no período
         CREATE VIEW pacientes_base AS
         SELECT
             e.*,
             c.* EXCLUDE (prontuario_anonimo)
         FROM evolu_n e
         LEFT JOIN cids_n c USING (prontuario_anonimo);
-
         """
     )
     return con
@@ -208,10 +201,6 @@ def df_from_duckdb(con, sql: str) -> pd.DataFrame:
 
 @st.cache_data
 def load_aux_tables():
-    """
-    Carrega as tabelas auxiliares de CID-10, SIGTAP e Regiões de Saúde
-    a partir de arquivos CSV que já vêm junto com o app.
-    """
     try:
         cid_df = pd.read_csv("listacids.csv", dtype=str)
     except FileNotFoundError:
@@ -231,12 +220,6 @@ def load_aux_tables():
 
 
 def enrich_with_aux_tables(df: pd.DataFrame, cid_df=None, sigtap_df=None, geo_df=None) -> pd.DataFrame:
-    """
-    Enriquecer o dataframe principal com:
-      - Capítulo / grupo CID-10
-      - Grupos de procedimento SIGTAP
-      - UF / Macrorregião / Região de Saúde
-    """
     if df is None:
         return df
     df_enriched = df.copy()
@@ -301,6 +284,7 @@ def enrich_with_aux_tables(df: pd.DataFrame, cid_df=None, sigtap_df=None, geo_df
                 if cand in df_enriched.columns:
                     proc_col = cand
                     break
+
             if sig_code_col and proc_col:
                 df_enriched[proc_col] = df_enriched[proc_col].astype(str).str.strip()
                 sig_df[sig_code_col] = sig_df[sig_code_col].astype(str).str.strip()
@@ -384,12 +368,6 @@ def pacientes_unicos(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def marcar_obito_periodo(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Marca obito_no_periodo (mortalidade hospitalar).
-    Regra: data_obito entre data_internacao e data_alta (mesmo dia conta),
-    considerando apenas a DATA (ignora horário). Se data_alta for nula,
-    basta data_obito >= data_internacao.
-    """
     if {"data_internacao", "data_alta"}.issubset(df.columns):
         e = df.copy()
         if "data_obito" in e.columns:
@@ -450,7 +428,6 @@ def marcar_uti_flag(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
-    """Marca reinternações em até 30 dias."""
     df = df.copy()
     required = {"prontuario_anonimo", "codigo_internacao", "data_internacao", "data_alta"}
     if not required.issubset(df.columns):
@@ -713,18 +690,10 @@ def mortalidade_30d_pos_alta(df: pd.DataFrame):
 
 
 def definir_base_para_indicador(indicador, df_f, df_pac):
-    """Define a base de linhas que alimenta os gráficos conforme o indicador.
-
-    Importante: para *quantidades*, evitamos contagem por linhas duplicadas.
-    - Pacientes: 1 linha por prontuário (df_pac).
-    - Internações: 1 linha por código de internação (df_f deduplicado).
-    """
     if indicador == "Quantidade de pacientes":
-        # 1 linha por paciente
         return df_pac.copy()
 
     if indicador == "Quantidade de internações":
-        # Garante 1 linha por internação (evita supercontagem caso existam duplicatas)
         if df_f is not None and "codigo_internacao" in df_f.columns:
             return df_f.drop_duplicates(subset=["codigo_internacao"]).copy()
         return df_f.copy()
@@ -782,12 +751,6 @@ def build_filters(df: pd.DataFrame):
     st.sidebar.header("Filtros")
 
     def _multiselect_com_todos(titulo: str, opcoes: list, key: str, default=None, help_text: str | None = None):
-        """Multiselect com a opção 'Selecionar todos' DENTRO da lista.
-
-        - 'Selecionar todos' aparece como um item no dropdown.
-        - Quando selecionado, marca todos os itens.
-        - Se o usuário desmarcar qualquer item após isso, o 'Selecionar todos' é removido automaticamente.
-        """
         all_token = "Selecionar todos"
         prev_key = f"__prev_{key}"
 
@@ -796,7 +759,6 @@ def build_filters(df: pd.DataFrame):
             default = opcoes
         default = [str(x) for x in default if str(x) in opcoes]
 
-        # inicializa estado
         if key not in st.session_state:
             if len(opcoes) > 0 and set(default) == set(opcoes):
                 st.session_state[key] = [all_token] + opcoes
@@ -810,19 +772,15 @@ def build_filters(df: pd.DataFrame):
             prev = st.session_state.get(prev_key, [])
             curr = st.session_state.get(key, [])
 
-            # 1) Token foi marcado agora -> selecionar tudo
             if all_token in curr and all_token not in prev:
                 st.session_state[key] = [all_token] + opcoes
 
-            # 2) Token já estava marcado e algo foi desmarcado -> remover token e manter parcial
             elif all_token in prev and all_token in curr and set(curr) != set([all_token] + opcoes):
                 st.session_state[key] = [x for x in curr if x != all_token]
 
             else:
-                # limpa token se aparecer indevidamente
                 curr_wo = [x for x in curr if x != all_token]
 
-                # se todos marcados manualmente -> adiciona token (para aparecer como um "chip" igual os outros)
                 if len(opcoes) > 0 and set(curr_wo) == set(opcoes):
                     st.session_state[key] = [all_token] + opcoes
                 else:
@@ -833,7 +791,6 @@ def build_filters(df: pd.DataFrame):
         with st.sidebar.container(border=True):
             st.markdown(f"**{titulo}**")
 
-            # Sanitiza seleção atual quando as opções mudam (evita StreamlitAPIException)
             valid_options = [all_token] + opcoes
             curr_safe = [x for x in st.session_state.get(key, []) if x in valid_options]
             prev_safe = [x for x in st.session_state.get(prev_key, []) if x in valid_options]
@@ -850,13 +807,10 @@ def build_filters(df: pd.DataFrame):
                 help=help_text,
             )
 
-        # guarda "prev" para a próxima interação
         st.session_state[prev_key] = st.session_state.get(key, []).copy()
-
         sel_final = st.session_state.get(key, [])
         return [x for x in sel_final if x != all_token]
 
-    # ---- Período da internação (calendário) ----
     periodo_sel = None
     if "data_internacao" in df.columns:
         min_dt = pd.to_datetime(df["data_internacao"]).min().date()
@@ -872,11 +826,11 @@ def build_filters(df: pd.DataFrame):
     else:
         st.sidebar.info("Coluna 'data_internacao' não encontrada para filtro de período.")
 
-    # ---- Idade ----
     if "idade" in df.columns and df["idade"].notna().any():
         idade_min, idade_max = int(np.nanmin(df["idade"])), int(np.nanmax(df["idade"]))
     else:
         idade_min, idade_max = 0, 120
+
     idade_sel = st.sidebar.slider(
         "Idade",
         min_value=0,
@@ -885,14 +839,13 @@ def build_filters(df: pd.DataFrame):
         step=1,
     )
 
-    # ---- Estado ----
     estado_col = next(
         (c for c in df.columns if c.lower() in ["estado_residencia", "uf_residencia", "uf", "estado", "sigla_uf"]),
         None,
     )
 
     estados_sel = []
-    df_estado = df  # base para filtros em cascata (fallback)
+    df_estado = df
 
     if estado_col:
         estados = sorted(df[estado_col].dropna().astype(str).unique().tolist())
@@ -903,11 +856,9 @@ def build_filters(df: pd.DataFrame):
             default=estados,
         )
 
-        # aplica recorte por estado para alimentar Região de Saúde e Município
         if estados_sel:
             df_estado = df[df[estado_col].isin(estados_sel)]
 
-    # ---- Região de saúde (dependente do Estado) ----
     regiao_col = next(
         (c for c in df.columns if "regiao" in c.lower() and "saud" in c.lower()),
         None,
@@ -923,7 +874,6 @@ def build_filters(df: pd.DataFrame):
             default=regioes,
         )
 
-    # ---- Município (dependente do Estado e Região de Saúde) ----
     cidade_col = "cidade_moradia" if "cidade_moradia" in df.columns else None
     cidades_sel = []
 
@@ -941,7 +891,6 @@ def build_filters(df: pd.DataFrame):
             default=default_cidades,
         )
 
-# ---- Sexo ----
     sexo_sel = []
     if "sexo" in df.columns:
         sexos = sorted(df["sexo"].dropna().astype(str).unique().tolist())
@@ -961,19 +910,17 @@ def build_filters(df: pd.DataFrame):
         "sexo": sexo_sel,
     }
 
+
 def apply_filters(df: pd.DataFrame, f, include_period: bool = True):
-    # Período
     if include_period and "data_internacao" in df.columns and f.get("periodo"):
         ini, fim = f["periodo"]
         ini = pd.to_datetime(ini)
         fim = pd.to_datetime(fim) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
         df = df[(df["data_internacao"] >= ini) & (df["data_internacao"] <= fim)]
 
-    # Idade
     if "idade" in df.columns and f["idade"]:
         df = df[(df["idade"] >= f["idade"][0]) & (df["idade"] <= f["idade"][1])]
 
-    # Estado
     estado_col = next(
         (c for c in df.columns if c.lower() in ["estado_residencia", "uf_residencia", "uf", "estado", "sigla_uf"]),
         None,
@@ -981,7 +928,6 @@ def apply_filters(df: pd.DataFrame, f, include_period: bool = True):
     if estado_col and f["estado"]:
         df = df[df[estado_col].isin(f["estado"])]
 
-    # Região de saúde
     regiao_col = next(
         (c for c in df.columns if "regiao" in c.lower() and "saud" in c.lower()),
         None,
@@ -989,11 +935,9 @@ def apply_filters(df: pd.DataFrame, f, include_period: bool = True):
     if regiao_col and f["regiao"]:
         df = df[df[regiao_col].isin(f["regiao"])]
 
-    # Município
     if "cidade_moradia" in df.columns and f["cidade"]:
         df = df[df["cidade_moradia"].isin(f["cidade"])]
 
-    # Sexo
     if "sexo" in df.columns and f["sexo"]:
         df = df[df["sexo"].isin(f["sexo"])]
 
@@ -1027,50 +971,38 @@ def show_active_filters(f):
 
 st.title("Perfil dos Pacientes")
 
-# ------------ Upload dos 3 CSVs (apenas na primeira vez) ------------
+# --------------------------------------------------------------------
+# CARREGAMENTO DIRETO DOS CSVs DA RAIZ DO PROJETO
+# --------------------------------------------------------------------
+
 if "df" not in st.session_state:
-    df_tmp = None
+    evo_path = "caracterizacao.csv"
+    proc_path = "procedimentos.csv"
+    cti_path = "cids.csv"
 
-    st.subheader("Envie os 3 arquivos CSV")
+    missing = [p for p in [evo_path, proc_path, cti_path] if not os.path.exists(p)]
+    if missing:
+        st.error(
+            "Os seguintes arquivos não foram encontrados na raiz do projeto: "
+            + ", ".join(missing)
+        )
+        st.stop()
 
-    c1, c2, c3 = st.columns(3)
-    evo = c1.file_uploader("CARACTERIZAÇÃO (csv)", type=["csv"], key="evo")
-    proc = c2.file_uploader("PROCEDIMENTOS (csv)", type=["csv"], key="proc")
-    cti = c3.file_uploader("CIDs/UTI (csv)", type=["csv"], key="cti")
+    con = load_duckdb((evo_path, proc_path, cti_path))
 
-    if evo and proc and cti:
-        tmpdir = tempfile.mkdtemp()
-        p_evo = os.path.join(tmpdir, "evo.csv")
-        p_proc = os.path.join(tmpdir, "proc.csv")
-        p_cti = os.path.join(tmpdir, "cti.csv")
-        open(p_evo, "wb").write(evo.getbuffer())
-        open(p_proc, "wb").write(proc.getbuffer())
-        open(p_cti, "wb").write(cti.getbuffer())
+    df_tmp = df_from_duckdb(con, "SELECT * FROM dataset")
+    df_tmp = _post_load(df_tmp)
 
-        con = load_duckdb((p_evo, p_proc, p_cti))
-        df_tmp = df_from_duckdb(con, "SELECT * FROM dataset")
-        df_tmp = _post_load(df_tmp)
+    cid_df, sigtap_df, geo_df = load_aux_tables()
+    df_tmp = enrich_with_aux_tables(df_tmp, cid_df, sigtap_df, geo_df)
 
-        cid_df, sigtap_df, geo_df = load_aux_tables()
-        df_tmp = enrich_with_aux_tables(df_tmp, cid_df, sigtap_df, geo_df)
+    df_base_tmp = df_from_duckdb(con, "SELECT * FROM pacientes_base")
+    df_base_tmp = _post_load(df_base_tmp)
+    df_base_tmp = enrich_with_aux_tables(df_base_tmp, cid_df, sigtap_df, geo_df)
 
-        # Base de pacientes (caracterização) para contagem alternativa
-        df_base_tmp = df_from_duckdb(con, "SELECT * FROM pacientes_base")
-        df_base_tmp = _post_load(df_base_tmp)
-        df_base_tmp = enrich_with_aux_tables(df_base_tmp, cid_df, sigtap_df, geo_df)
+    st.session_state["df"] = df_tmp
+    st.session_state["df_base"] = df_base_tmp
 
-        st.session_state["df"] = df_tmp
-        st.session_state["df_base"] = df_base_tmp
-        st.success("Arquivos carregados com sucesso! Painel inicializado.")
-
-        try:
-            st.rerun()
-        except Exception:
-            st.experimental_rerun()
-
-    st.stop()
-
-# ------------ Depois de carregado, não mostra mais os uploaders ------------
 df = st.session_state["df"]
 df_base = st.session_state.get("df_base")
 
@@ -1078,15 +1010,15 @@ if df is None or df.empty:
     st.error("Dataset vazio ou não carregado corretamente.")
     st.stop()
 
-# Filtros
 f = build_filters(df)
 df_f = apply_filters(df, f, include_period=True)
-# Para a base de pacientes, aplicamos apenas filtros demográficos (sem período)
 df_base_f = apply_filters(df_base, f, include_period=False) if df_base is not None else None
 df_pac = pacientes_unicos(df_f)
 
 pacientes_base_count = (
-    df_base_f["prontuario_anonimo"].nunique() if (df_base_f is not None and "prontuario_anonimo" in df_base_f.columns) else np.nan
+    df_base_f["prontuario_anonimo"].nunique()
+    if (df_base_f is not None and "prontuario_anonimo" in df_base_f.columns)
+    else np.nan
 )
 
 show_active_filters(f)
@@ -1094,7 +1026,6 @@ st.divider()
 
 modo_perfil = True
 
-# KPIs globais
 pacientes, internacoes, tmi, mort_hosp = kpis(df_f, df_pac)
 ri_proc = reinternacao_30d_pos_proced(df_f)
 ri_alta = reinternacao_30d_pos_alta(df_f)
@@ -1103,7 +1034,6 @@ tmi_uti = tempo_medio_uti_dias(df_f)
 mort_30_proc = mortalidade_30d_pos_proced(df_f)
 mort_30_alta = mortalidade_30d_pos_alta(df_f)
 
-# Estilo dos botões dos indicadores
 st.markdown("""
 <style>
 div[data-baseweb="radio"] > div {
@@ -1149,7 +1079,6 @@ indicadores_icardio = [
     "Mortalidade em até 30 dias da alta (%)",
 ]
 
-# tipos de indicador
 indicadores_quantidade = [
     "Quantidade de pacientes",
     "Quantidade de internações",
@@ -1172,12 +1101,6 @@ indicadores_percentual = [
 
 
 def agrega_para_grafico(df, group_cols, indicador):
-    """
-    Usa a coluna 'peso':
-    - Quantidade  -> soma
-    - Tempo médio -> média
-    - Percentual  -> média*100
-    """
     g = df.groupby(group_cols, dropna=False)["peso"]
 
     if indicador in indicadores_percentual:
@@ -1197,26 +1120,18 @@ def label_eixo_x(indicador):
     return "Quantidade"
 
 
-# ---------- mapa de cores fixas por sexo ----------
 def get_sexo_color_map(categories):
-    """
-    Retorna um dict categoria -> cor, mantendo:
-    - Masculino: azul
-    - Feminino: rosa
-    - Outros: cinza
-    """
     mapa = {}
     for s in categories:
         chave = str(s)
         norm = chave.strip().upper()
         if norm in ["M", "MASCULINO"]:
-            mapa[chave] = "#6794DC"  # azul
+            mapa[chave] = "#6794DC"
         elif norm in ["F", "FEMININO"]:
-            mapa[chave] = "#E86F86"  # rosa
+            mapa[chave] = "#E86F86"
         else:
-            mapa[chave] = "#A3A3A3"  # neutro
+            mapa[chave] = "#A3A3A3"
     return mapa
-# --------------------------------------------------------
 
 
 st.markdown("### Indicadores disponíveis")
@@ -1297,7 +1212,6 @@ def _fmt_int_pt(v) -> str:
 
 
 def indicador_percentual_info(nome: str, df_eventos: pd.DataFrame):
-    """Retorna (pct, numerador, denominador) para indicadores percentuais."""
     if df_eventos is None or df_eventos.empty:
         return np.nan, np.nan, np.nan
 
@@ -1342,36 +1256,29 @@ def indicador_percentual_info(nome: str, df_eventos: pd.DataFrame):
     return np.nan, np.nan, np.nan
 
 
-
 valor_ind = calcular_indicador(indicador_selecionado)
 
-# Para percentuais, também mostramos numerador/denominador (quantidade de internações elegíveis)
 pct_numer = pct_denom = np.nan
 if indicador_selecionado in indicadores_percentual:
     _, pct_numer, pct_denom = indicador_percentual_info(indicador_selecionado, df_f)
 
 if pd.isna(valor_ind):
     texto_valor = "—"
-
 elif indicador_selecionado in [
     "Quantidade de pacientes",
     "Quantidade de internações",
     "Quantidade de procedimentos",
 ]:
     texto_valor = _fmt_int_pt(valor_ind)
-
 elif indicador_selecionado in indicadores_percentual:
     if pd.notna(pct_numer) and pd.notna(pct_denom) and pct_denom:
         texto_valor = f"{valor_ind:.2f}% ({_fmt_int_pt(pct_numer)}/{_fmt_int_pt(pct_denom)})"
     else:
         texto_valor = f"{valor_ind:.2f}%"
-
 else:
-    # demais indicadores numéricos (médias etc.)
     texto_valor = f"{valor_ind:.2f}".replace(".", ",")
-# --------------------------------------------------------------------
-# FORMATAÇÃO PARA CARDS
-# --------------------------------------------------------------------
+
+
 def format_val_for_card(indicador: str, v: float) -> str:
     if pd.isna(v):
         return "—"
@@ -1382,7 +1289,6 @@ def format_val_for_card(indicador: str, v: float) -> str:
     if indicador in indicadores_media:
         return f"{v:.1f}"
 
-    # Quantidades (inteiros)
     if indicador in [
         "Quantidade de pacientes",
         "Quantidade de internações",
@@ -1393,7 +1299,6 @@ def format_val_for_card(indicador: str, v: float) -> str:
             return f"{int(v_int/1000)} Mil"
         return f"{v_int}"
 
-    # fallback
     return f"{v:,.0f}".replace(",", ".")
 
 
@@ -1405,11 +1310,6 @@ def card_bar_fig(
     color_map=None,
     height: int = 90,
 ):
-    """Retorna um gráfico Plotly em forma de card (barra única segmentada).
-
-    - colors: lista de cores (sequência padrão)
-    - color_map: dict categoria -> cor (fixa por categoria)
-    """
     if df_cat.empty:
         return go.Figure()
 
@@ -1458,10 +1358,6 @@ def card_bar_fig(
     return fig
 
 
-# --------------------------------------------------------------------
-# BASE PARA GRÁFICOS E GRID PRINCIPAL
-# --------------------------------------------------------------------
-
 st.divider()
 
 if indicador_selecionado == "Quantidade de pacientes" and modo_perfil:
@@ -1474,10 +1370,9 @@ base_charts = adicionar_peso_por_indicador(base_charts, indicador_selecionado)
 col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
 
 # --------------------------------------------------------------------
-# PRIMEIRA COLUNA: Sexo; Raça/Cor × Sexo; Pirâmide Etária
+# PRIMEIRA COLUNA
 # --------------------------------------------------------------------
 with col_esq:
-    # Sexo (CARD)
     st.subheader("Sexo")
     if "sexo" in base_charts.columns:
         df_sexo = agrega_para_grafico(base_charts, ["sexo"], indicador_selecionado)
@@ -1496,7 +1391,6 @@ with col_esq:
     else:
         st.info("Coluna 'sexo' não encontrada.")
 
-    # Raça/Cor × Sexo
     st.subheader("Raça/Cor × Sexo")
     if {"etnia", "sexo"}.issubset(base_charts.columns):
         df_etnia = agrega_para_grafico(
@@ -1536,7 +1430,6 @@ with col_esq:
     else:
         st.info("Requer colunas 'etnia' e 'sexo'.")
 
-    # Pirâmide Etária
     st.subheader("Pirâmide Etária")
     if {"faixa_etaria", "sexo"}.issubset(base_charts.columns):
         categorias = [
@@ -1571,7 +1464,7 @@ with col_esq:
 
         for idx, sexo_cat in enumerate(pivot.columns):
             values = pivot[sexo_cat]
-            x_vals = -values if idx == 0 else values  # lado esquerdo/direito
+            x_vals = -values if idx == 0 else values
 
             cor = sexo_color_map.get(sexo_cat, "#A3A3A3")
 
@@ -1611,11 +1504,9 @@ with col_esq:
         st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
 
 # --------------------------------------------------------------------
-# SEGUNDA COLUNA:
-# Caráter do Atendimento; Procedimentos; CID; Treemap
+# SEGUNDA COLUNA
 # --------------------------------------------------------------------
 with col_meio:
-    # Caráter do Atendimento
     st.subheader("Caráter do Atendimento")
     carater_col = None
     for cand in ["carater_atendimento", "caracter_atendimento", "carater", "natureza_agend"]:
@@ -1631,13 +1522,13 @@ with col_meio:
         for v in df_car[carater_col]:
             s = str(v).upper()
             if s.startswith("ELE"):
-                car_colors.append("#4CAF50")   # eletivo
+                car_colors.append("#4CAF50")
             elif s.startswith("URG"):
-                car_colors.append("#2E7D32")   # urgência
+                car_colors.append("#2E7D32")
             elif s.startswith("EME") or s.startswith("EMG"):
-                car_colors.append("#FBC02D")   # emergência
+                car_colors.append("#FBC02D")
             else:
-                car_colors.append("#7A6FB3")   # padrão
+                car_colors.append("#7A6FB3")
 
         fig = card_bar_fig(
             df_car,
@@ -1652,7 +1543,6 @@ with col_meio:
 
     st.markdown("---")
 
-    # Procedimentos
     st.subheader("Procedimentos")
     proc_cols = [
         c
@@ -1683,7 +1573,6 @@ with col_meio:
 
     st.markdown("---")
 
-    # CID (capítulo / grupo)
     st.subheader("CID (capítulo / grupo)")
 
     if "cid_grupo" in base_charts.columns and base_charts["cid_grupo"].notna().any():
@@ -1740,44 +1629,41 @@ with col_meio:
 
     st.markdown("---")
 
-    # Treemap – Estado → Região de Saúde → Município
-st.subheader("Estado → Região de Saúde → Município de residência")
+    st.subheader("Estado → Região de Saúde → Município de residência")
 
-if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base_charts.columns):
-    df_geo_raw = base_charts.copy()
+    if {"uf", "regiao_saude", "cidade_moradia"}.issubset(base_charts.columns):
+        df_geo_raw = base_charts.copy()
 
-    # Normaliza textos e evita níveis ausentes no meio da hierarquia (isso causa ValueError no px.treemap)
-    for col in ["uf", "regiao_saude", "cidade_moradia"]:
-        df_geo_raw[col] = df_geo_raw[col].astype("string").str.strip()
-        df_geo_raw[col] = df_geo_raw[col].replace({"": pd.NA})
+        for col in ["uf", "regiao_saude", "cidade_moradia"]:
+            df_geo_raw[col] = df_geo_raw[col].astype("string").str.strip()
+            df_geo_raw[col] = df_geo_raw[col].replace({"": pd.NA})
 
-    # Preenche faltantes para não gerar "non-leaf rows" e prefixa rótulos para evitar colisão de nomes entre níveis
-    df_geo_raw["uf"] = df_geo_raw["uf"].fillna("Sem UF").str.upper()
-    df_geo_raw["regiao_saude"] = df_geo_raw["regiao_saude"].fillna("Sem região de saúde")
-    df_geo_raw["cidade_moradia"] = df_geo_raw["cidade_moradia"].fillna("Sem município")
+        df_geo_raw["uf"] = df_geo_raw["uf"].fillna("Sem UF").str.upper()
+        df_geo_raw["regiao_saude"] = df_geo_raw["regiao_saude"].fillna("Sem região de saúde")
+        df_geo_raw["cidade_moradia"] = df_geo_raw["cidade_moradia"].fillna("Sem município")
 
-    df_geo_raw["uf_lbl"] = "UF: " + df_geo_raw["uf"].astype(str)
-    df_geo_raw["regiao_lbl"] = "RS: " + df_geo_raw["regiao_saude"].astype(str)
-    df_geo_raw["cidade_lbl"] = "Mun: " + df_geo_raw["cidade_moradia"].astype(str)
+        df_geo_raw["uf_lbl"] = "UF: " + df_geo_raw["uf"].astype(str)
+        df_geo_raw["regiao_lbl"] = "RS: " + df_geo_raw["regiao_saude"].astype(str)
+        df_geo_raw["cidade_lbl"] = "Mun: " + df_geo_raw["cidade_moradia"].astype(str)
 
-    df_geo_plot = agrega_para_grafico(
-        df_geo_raw, ["uf_lbl", "regiao_lbl", "cidade_lbl"], indicador_selecionado
-    )
-    df_geo_plot["valor"] = df_geo_plot["valor"].clip(lower=0)
-    df_geo_plot["valor_plot"] = np.sqrt(df_geo_plot["valor"])
+        df_geo_plot = agrega_para_grafico(
+            df_geo_raw, ["uf_lbl", "regiao_lbl", "cidade_lbl"], indicador_selecionado
+        )
+        df_geo_plot["valor"] = df_geo_plot["valor"].clip(lower=0)
+        df_geo_plot["valor_plot"] = np.sqrt(df_geo_plot["valor"])
 
-    fig = px.treemap(
-        df_geo_plot,
-        path=["uf_lbl", "regiao_lbl", "cidade_lbl"],
-        values="valor_plot",
-    )
-    fig.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis.")
+        fig = px.treemap(
+            df_geo_plot,
+            path=["uf_lbl", "regiao_lbl", "cidade_lbl"],
+            values="valor_plot",
+        )
+        fig.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis.")
+
 # --------------------------------------------------------------------
-# TERCEIRA COLUNA:
-# Valor do indicador; Boxplot – Idade por sexo
+# TERCEIRA COLUNA
 # --------------------------------------------------------------------
 with col_dir:
     st.subheader(indicador_selecionado)
@@ -1791,13 +1677,14 @@ with col_dir:
     st.caption("Valor do indicador no período filtrado")
 
     if indicador_selecionado == "Quantidade de pacientes" and pd.notna(pacientes_base_count):
-        st.caption(f"Também na base de caracterização (sem filtro de período): **{int(pacientes_base_count):,}**".replace(",", "."))
+        st.caption(
+            f"Também na base de caracterização (sem filtro de período): **{int(pacientes_base_count):,}**".replace(",", ".")
+        )
 
     st.markdown("---")
 
-
 # --------------------------------------------------------------------
-# COMPARATIVO TEMPORAL (ANO ou MÊS)
+# COMPARATIVO TEMPORAL
 # --------------------------------------------------------------------
 
 st.divider()
@@ -1857,7 +1744,7 @@ if modo_comp == "Ano":
     else:
         st.info("Coluna de ano não encontrada no dataset.")
 
-else:  # modo_comp == "Mês"
+else:
     if "data_internacao" in df_f.columns:
         df_valid = df_f[~df_f["data_internacao"].isna()].copy()
         if not df_valid.empty:
