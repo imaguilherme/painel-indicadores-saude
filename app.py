@@ -1020,7 +1020,6 @@ pacientes_base_count = (
     else np.nan
 )
 
-show_active_filters(f)
 st.divider()
 
 modo_perfil = True
