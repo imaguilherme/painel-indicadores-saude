@@ -6,19 +6,7 @@ import plotly.graph_objects as go
 import duckdb
 import os
 
-try:
-    from streamlit_plotly_events import plotly_events
-    HAS_PLOTLY_EVENTS = True
-except Exception:
-    plotly_events = None
-    HAS_PLOTLY_EVENTS = False
-
 st.set_page_config(page_title="Perfil dos Pacientes", layout="wide")
-
-if "__chart_filters_by_chart" not in st.session_state:
-    st.session_state["__chart_filters_by_chart"] = {}
-if "__chart_nonce" not in st.session_state:
-    st.session_state["__chart_nonce"] = 0
 
 # --------------------------------------------------------------------
 # FUNÇÕES DE CARGA E PRÉ-PROCESSAMENTO
@@ -976,288 +964,11 @@ def show_active_filters(f):
         st.markdown("**Filtros ativos:** nenhum filtro aplicado.")
 
 
-
-def _normalize_chart_selection(selection: dict | None) -> dict:
-    if not selection:
-        return {}
-
-    out = {}
-    for dim, values in selection.items():
-        if values is None:
-            continue
-        if not isinstance(values, (list, tuple, set)):
-            values = [values]
-
-        cleaned = []
-        for v in values:
-            if pd.isna(v):
-                continue
-            cleaned.append(v)
-
-        unique_vals = []
-        seen = set()
-        for v in cleaned:
-            key = repr(v)
-            if key not in seen:
-                seen.add(key)
-                unique_vals.append(v)
-
-        if unique_vals:
-            try:
-                unique_vals = sorted(unique_vals, key=lambda x: str(x))
-            except Exception:
-                pass
-            out[dim] = unique_vals
-    return out
-
-
-def _extract_plotly_selection_points(widget_state) -> list:
-    if widget_state is None:
-        return []
-
-    selection = None
-    if hasattr(widget_state, "selection"):
-        selection = widget_state.selection
-    elif isinstance(widget_state, dict):
-        selection = widget_state.get("selection")
-
-    if selection is None:
-        return []
-
-    if hasattr(selection, "points"):
-        points = selection.points
-    elif isinstance(selection, dict):
-        points = selection.get("points", [])
-    else:
-        points = []
-
-    return list(points or [])
-
-
-def _parse_points_from_customdata(points: list, dim_names: list[str]) -> dict:
-    selecionados = {dim: [] for dim in dim_names}
-
-    for pt in points:
-        custom = None
-        if hasattr(pt, "customdata"):
-            custom = pt.customdata
-        elif isinstance(pt, dict):
-            custom = pt.get("customdata")
-
-        if custom is None:
-            custom = []
-
-        if not isinstance(custom, (list, tuple)):
-            custom = [custom]
-
-        for idx, dim in enumerate(dim_names):
-            if idx < len(custom) and pd.notna(custom[idx]):
-                selecionados[dim].append(custom[idx])
-
-    return _normalize_chart_selection(selecionados)
-
-
-def _parse_treemap_points(points: list) -> dict:
-    selecionados = {"uf": [], "regiao_saude": [], "cidade_moradia": []}
-
-    for pt in points:
-        custom = None
-        if hasattr(pt, "customdata"):
-            custom = pt.customdata
-        elif isinstance(pt, dict):
-            custom = pt.get("customdata")
-
-        if isinstance(custom, (list, tuple)) and len(custom) >= 3:
-            if pd.notna(custom[0]):
-                selecionados["uf"].append(custom[0])
-            if pd.notna(custom[1]):
-                selecionados["regiao_saude"].append(custom[1])
-            if pd.notna(custom[2]):
-                selecionados["cidade_moradia"].append(custom[2])
-            continue
-
-        raw_id = None
-        if hasattr(pt, "id"):
-            raw_id = pt.id
-        elif isinstance(pt, dict):
-            raw_id = pt.get("id")
-
-        if raw_id:
-            partes = [p for p in str(raw_id).split("/") if p]
-            for item in partes:
-                if item.startswith("UF: "):
-                    selecionados["uf"].append(item.replace("UF: ", "", 1).strip())
-                elif item.startswith("RS: "):
-                    selecionados["regiao_saude"].append(item.replace("RS: ", "", 1).strip())
-                elif item.startswith("Mun: "):
-                    selecionados["cidade_moradia"].append(item.replace("Mun: ", "", 1).strip())
-
-    return _normalize_chart_selection(selecionados)
-
-
-def combine_chart_filters(filters_by_chart: dict | None) -> dict:
-    if not filters_by_chart:
-        return {}
-
-    agrupado = {}
-    for _, selection in filters_by_chart.items():
-        selection = _normalize_chart_selection(selection)
-        for dim, values in selection.items():
-            conjunto = set(values)
-            if dim not in agrupado:
-                agrupado[dim] = conjunto
-            else:
-                agrupado[dim] = agrupado[dim].intersection(conjunto)
-
-    combinado = {}
-    for dim, values in agrupado.items():
-        if values:
-            combinado[dim] = sorted(values, key=lambda x: str(x))
-    return combinado
-
-
-def sanitize_chart_filter_state(df_ref: pd.DataFrame) -> dict:
-    filters_by_chart = dict(st.session_state.get("__chart_filters_by_chart", {}))
-    changed = False
-
-    for chart_id, selection in list(filters_by_chart.items()):
-        selection = _normalize_chart_selection(selection)
-        cleaned = {}
-
-        for dim, values in selection.items():
-            if dim not in df_ref.columns:
-                cleaned[dim] = values
-                continue
-
-            valid_values = set(df_ref.loc[df_ref[dim].notna(), dim].tolist())
-            kept = [v for v in values if v in valid_values]
-            if kept:
-                cleaned[dim] = kept
-
-        if cleaned:
-            if cleaned != selection:
-                changed = True
-            filters_by_chart[chart_id] = cleaned
-        else:
-            filters_by_chart.pop(chart_id, None)
-            changed = True
-
-    if changed:
-        st.session_state["__chart_filters_by_chart"] = filters_by_chart
-
-    return filters_by_chart
-
-
-def apply_chart_filters(df: pd.DataFrame | None, filters_by_chart: dict | None) -> pd.DataFrame | None:
-    if df is None:
-        return None
-
-    combined = combine_chart_filters(filters_by_chart)
-    if not combined:
-        return df
-
-    out = df.copy()
-    for dim, values in combined.items():
-        if dim in out.columns and values:
-            out = out[out[dim].isin(values)]
-    return out
-
-
-def show_active_chart_filters(filters_by_chart: dict | None):
-    combined = combine_chart_filters(filters_by_chart)
-    if not combined:
-        st.caption("Seleções dos gráficos: nenhuma")
-        return
-
-    partes = []
-    for dim, values in combined.items():
-        rotulo = dim.replace("_", " ").title()
-        partes.append(f"**{rotulo}:** " + ", ".join(str(v) for v in values))
-    st.caption("Seleções dos gráficos: " + " | ".join(partes))
-
-
-def render_interactive_chart(
-    fig,
-    chart_id: str,
-    parser,
-    use_container_width: bool = True,
-    config: dict | None = None,
-):
-    fig.update_layout(clickmode="event+select", uirevision="crossfilter")
-
-    widget_key = f"plot_{chart_id}_{st.session_state.get('__chart_nonce', 0)}"
-    config = config or {}
-    points = []
-
-    if HAS_PLOTLY_EVENTS:
-        kwargs = {
-            "click_event": True,
-            "select_event": True,
-            "hover_event": False,
-            "key": widget_key,
-        }
-        fig_height = getattr(fig.layout, "height", None)
-        if fig_height is not None:
-            try:
-                kwargs["override_height"] = int(fig_height)
-            except Exception:
-                pass
-        if use_container_width:
-            kwargs["override_width"] = "100%"
-
-        points = plotly_events(fig, **kwargs) or []
-    else:
-        supports_selection = True
-        try:
-            st.plotly_chart(
-                fig,
-                use_container_width=use_container_width,
-                key=widget_key,
-                config=config,
-                on_select="rerun",
-                selection_mode=("points", "box", "lasso"),
-            )
-        except TypeError:
-            supports_selection = False
-            st.plotly_chart(
-                fig,
-                use_container_width=use_container_width,
-                key=widget_key,
-                config=config,
-            )
-
-        if not supports_selection:
-            return
-
-        widget_state = st.session_state.get(widget_key)
-        points = _extract_plotly_selection_points(widget_state)
-
-    new_selection = _normalize_chart_selection(parser(points))
-
-    filters_by_chart = dict(st.session_state.get("__chart_filters_by_chart", {}))
-    old_selection = _normalize_chart_selection(filters_by_chart.get(chart_id, {}))
-
-    if new_selection != old_selection:
-        if new_selection:
-            filters_by_chart[chart_id] = new_selection
-        else:
-            filters_by_chart.pop(chart_id, None)
-
-        st.session_state["__chart_filters_by_chart"] = filters_by_chart
-        st.rerun()
-
-
 # --------------------------------------------------------------------
 # INTERFACE PRINCIPAL
 # --------------------------------------------------------------------
 
 st.title("Perfil dos Pacientes")
-
-if not HAS_PLOTLY_EVENTS:
-    st.error("Os gráficos não vão ficar clicáveis neste ambiente porque a biblioteca `streamlit-plotly-events` não está instalada ou não foi carregada. Instale a biblioteca no mesmo ambiente do Streamlit e reinicie a aplicação.")
-    st.code("pip install streamlit-plotly-events", language="bash")
-    st.info("Depois disso, feche o processo atual e rode o app novamente com o mesmo ambiente virtual.")
-    st.stop()
 
 # --------------------------------------------------------------------
 # CARREGAMENTO DIRETO DOS CSVs DA RAIZ DO PROJETO
@@ -1299,12 +1010,8 @@ if df is None or df.empty:
     st.stop()
 
 f = build_filters(df)
-df_sidebar_f = apply_filters(df, f, include_period=True)
-df_base_sidebar_f = apply_filters(df_base, f, include_period=False) if df_base is not None else None
-
-filters_by_chart = sanitize_chart_filter_state(df_sidebar_f)
-df_f = apply_chart_filters(df_sidebar_f, filters_by_chart)
-df_base_f = apply_chart_filters(df_base_sidebar_f, filters_by_chart) if df_base_sidebar_f is not None else None
+df_f = apply_filters(df, f, include_period=True)
+df_base_f = apply_filters(df_base, f, include_period=False) if df_base is not None else None
 df_pac = pacientes_unicos(df_f)
 
 pacientes_base_count = (
@@ -1432,8 +1139,6 @@ indicador_selecionado = st.radio(
     indicadores_icardio,
     horizontal=True,
 )
-
-
 
 
 def calcular_indicador(nome):
@@ -1602,7 +1307,6 @@ def card_bar_fig(
     colors=None,
     color_map=None,
     height: int = 90,
-    custom_data=None,
 ):
     if df_cat.empty:
         return go.Figure()
@@ -1628,7 +1332,6 @@ def card_bar_fig(
         color=cat_col,
         orientation="h",
         text="text",
-        custom_data=custom_data,
         **bar_kwargs,
     )
 
@@ -1681,15 +1384,8 @@ with col_esq:
             indicador=indicador_selecionado,
             color_map=sexo_color_map,
             height=90,
-            custom_data=["sexo"],
         )
-        render_interactive_chart(
-            fig,
-            chart_id="sexo",
-            parser=lambda points: _parse_points_from_customdata(points, ["sexo"]),
-            use_container_width=True,
-            config={"displayModeBar": False},
-        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     else:
         st.info("Coluna 'sexo' não encontrada.")
 
@@ -1710,7 +1406,6 @@ with col_esq:
             barmode="group",
             orientation="h",
             text="valor_fmt",
-            custom_data=["etnia", "sexo"],
             color_discrete_map=sexo_color_map,
         )
 
@@ -1729,13 +1424,7 @@ with col_esq:
             height=350,
             margin=dict(t=40, b=40),
         )
-        render_interactive_chart(
-            fig,
-            chart_id="etnia_sexo",
-            parser=lambda points: _parse_points_from_customdata(points, ["etnia", "sexo"]),
-            use_container_width=True,
-            config={"displayModeBar": True},
-        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
     else:
         st.info("Requer colunas 'etnia' e 'sexo'.")
 
@@ -1785,7 +1474,6 @@ with col_esq:
                 marker_color=cor,
                 text=np.round(values, 2),
                 textposition="outside",
-                customdata=list(zip(pivot.index.tolist(), [sexo_cat] * len(pivot.index))),
             )
 
         max_abs = float(np.nanmax(np.abs(pivot.values))) if pivot.values.size > 0 else 0.0
@@ -1809,12 +1497,7 @@ with col_esq:
             showlegend=True,
         )
 
-        render_interactive_chart(
-            fig,
-            chart_id="faixa_etaria_sexo",
-            parser=lambda points: _parse_points_from_customdata(points, ["faixa_etaria", "sexo"]),
-            use_container_width=True,
-        )
+        st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
 
@@ -1851,15 +1534,8 @@ with col_meio:
             indicador=indicador_selecionado,
             colors=car_colors,
             height=90,
-            custom_data=[carater_col],
         )
-        render_interactive_chart(
-            fig,
-            chart_id="carater_atendimento",
-            parser=lambda points, dim=carater_col: _parse_points_from_customdata(points, [dim]),
-            use_container_width=True,
-            config={"displayModeBar": False},
-        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     else:
         st.info("Coluna de caráter não encontrada.")
 
@@ -1881,7 +1557,6 @@ with col_meio:
             x="valor",
             orientation="h",
             text="valor",
-            custom_data=[pcol],
             color_discrete_sequence=["#4C72B0"],
         )
         fig.update_layout(
@@ -1890,12 +1565,7 @@ with col_meio:
             height=260,
             margin=dict(t=40, b=40),
         )
-        render_interactive_chart(
-            fig,
-            chart_id="procedimento",
-            parser=lambda points, dim=pcol: _parse_points_from_customdata(points, [dim]),
-            use_container_width=True,
-        )
+        st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Não encontrei coluna de procedimento agregada.")
 
@@ -1914,7 +1584,6 @@ with col_meio:
             x="valor",
             orientation="h",
             text="valor",
-            custom_data=["cid_grupo"],
             color_discrete_sequence=["#55A868"],
         )
         fig.update_layout(
@@ -1923,12 +1592,7 @@ with col_meio:
             height=260,
             margin=dict(t=40, b=40),
         )
-        render_interactive_chart(
-            fig,
-            chart_id="cid_grupo",
-            parser=lambda points: _parse_points_from_customdata(points, ["cid_grupo"]),
-            use_container_width=True,
-        )
+        st.plotly_chart(fig, use_container_width=True)
     else:
         cid_candidates = []
         for c in base_charts.columns:
@@ -1949,7 +1613,6 @@ with col_meio:
                 x="valor",
                 orientation="h",
                 text="valor",
-                custom_data=[col_cid],
                 color_discrete_sequence=["#55A868"],
             )
             fig.update_layout(
@@ -1958,12 +1621,7 @@ with col_meio:
                 height=260,
                 margin=dict(t=40, b=40),
             )
-            render_interactive_chart(
-                fig,
-                chart_id="cid_diagnostico",
-                parser=lambda points, dim=col_cid: _parse_points_from_customdata(points, [dim]),
-                use_container_width=True,
-            )
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Não encontrei nenhuma coluna de CID ou diagnóstico no dataset.")
 
@@ -1987,9 +1645,7 @@ with col_meio:
         df_geo_raw["cidade_lbl"] = "Mun: " + df_geo_raw["cidade_moradia"].astype(str)
 
         df_geo_plot = agrega_para_grafico(
-            df_geo_raw,
-            ["uf", "regiao_saude", "cidade_moradia", "uf_lbl", "regiao_lbl", "cidade_lbl"],
-            indicador_selecionado,
+            df_geo_raw, ["uf_lbl", "regiao_lbl", "cidade_lbl"], indicador_selecionado
         )
         df_geo_plot["valor"] = df_geo_plot["valor"].clip(lower=0)
         df_geo_plot["valor_plot"] = np.sqrt(df_geo_plot["valor"])
@@ -1998,15 +1654,9 @@ with col_meio:
             df_geo_plot,
             path=["uf_lbl", "regiao_lbl", "cidade_lbl"],
             values="valor_plot",
-            custom_data=["uf", "regiao_saude", "cidade_moradia"],
         )
         fig.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
-        render_interactive_chart(
-            fig,
-            chart_id="geografia",
-            parser=_parse_treemap_points,
-            use_container_width=True,
-        )
+        st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis.")
 
