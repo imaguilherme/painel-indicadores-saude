@@ -6,6 +6,13 @@ import plotly.graph_objects as go
 import duckdb
 import os
 
+try:
+    from streamlit_plotly_events import plotly_events
+    HAS_PLOTLY_EVENTS = True
+except Exception:
+    plotly_events = None
+    HAS_PLOTLY_EVENTS = False
+
 st.set_page_config(page_title="Perfil dos Pacientes", layout="wide")
 
 # --------------------------------------------------------------------
@@ -1175,31 +1182,51 @@ def render_interactive_chart(
 
     widget_key = f"plot_{chart_id}_{st.session_state.get('__chart_nonce', 0)}"
     config = config or {}
+    points = []
 
-    supports_selection = True
-    try:
-        st.plotly_chart(
-            fig,
-            use_container_width=use_container_width,
-            key=widget_key,
-            config=config,
-            on_select="rerun",
-            selection_mode=("points", "box", "lasso"),
-        )
-    except TypeError:
-        supports_selection = False
-        st.plotly_chart(
-            fig,
-            use_container_width=use_container_width,
-            key=widget_key,
-            config=config,
-        )
+    if HAS_PLOTLY_EVENTS:
+        kwargs = {
+            "click_event": True,
+            "select_event": True,
+            "hover_event": False,
+            "key": widget_key,
+        }
+        fig_height = getattr(fig.layout, "height", None)
+        if fig_height is not None:
+            try:
+                kwargs["override_height"] = int(fig_height)
+            except Exception:
+                pass
+        if use_container_width:
+            kwargs["override_width"] = "100%"
 
-    if not supports_selection:
-        return
+        points = plotly_events(fig, **kwargs) or []
+    else:
+        supports_selection = True
+        try:
+            st.plotly_chart(
+                fig,
+                use_container_width=use_container_width,
+                key=widget_key,
+                config=config,
+                on_select="rerun",
+                selection_mode=("points", "box", "lasso"),
+            )
+        except TypeError:
+            supports_selection = False
+            st.plotly_chart(
+                fig,
+                use_container_width=use_container_width,
+                key=widget_key,
+                config=config,
+            )
 
-    widget_state = st.session_state.get(widget_key)
-    points = _extract_plotly_selection_points(widget_state)
+        if not supports_selection:
+            return
+
+        widget_state = st.session_state.get(widget_key)
+        points = _extract_plotly_selection_points(widget_state)
+
     new_selection = _normalize_chart_selection(parser(points))
 
     filters_by_chart = dict(st.session_state.get("__chart_filters_by_chart", {}))
@@ -1403,7 +1430,10 @@ with col_cf_a:
         st.session_state["__chart_nonce"] = st.session_state.get("__chart_nonce", 0) + 1
         st.rerun()
 with col_cf_b:
-    st.caption("Clique nos gráficos para aplicar filtros acumulativos. Para remover tudo, use o botão ao lado.")
+    aviso = "Clique nos gráficos para aplicar filtros acumulativos. Para remover tudo, use o botão ao lado."
+    if not HAS_PLOTLY_EVENTS:
+        aviso += " Se o clique não responder, instale streamlit-plotly-events para ativar clique real nos gráficos."
+    st.caption(aviso)
     show_active_chart_filters(filters_by_chart)
 
 
