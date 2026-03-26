@@ -15,6 +15,11 @@ except Exception:
 
 st.set_page_config(page_title="Perfil dos Pacientes", layout="wide")
 
+if "__chart_filters_by_chart" not in st.session_state:
+    st.session_state["__chart_filters_by_chart"] = {}
+if "__chart_nonce" not in st.session_state:
+    st.session_state["__chart_nonce"] = 0
+
 # --------------------------------------------------------------------
 # FUNÇÕES DE CARGA E PRÉ-PROCESSAMENTO
 # --------------------------------------------------------------------
@@ -1248,6 +1253,12 @@ def render_interactive_chart(
 
 st.title("Perfil dos Pacientes")
 
+if not HAS_PLOTLY_EVENTS:
+    st.error("Os gráficos não vão ficar clicáveis neste ambiente porque a biblioteca `streamlit-plotly-events` não está instalada ou não foi carregada. Instale a biblioteca no mesmo ambiente do Streamlit e reinicie a aplicação.")
+    st.code("pip install streamlit-plotly-events", language="bash")
+    st.info("Depois disso, feche o processo atual e rode o app novamente com o mesmo ambiente virtual.")
+    st.stop()
+
 # --------------------------------------------------------------------
 # CARREGAMENTO DIRETO DOS CSVs DA RAIZ DO PROJETO
 # --------------------------------------------------------------------
@@ -1423,18 +1434,6 @@ indicador_selecionado = st.radio(
 )
 
 
-col_cf_a, col_cf_b = st.columns([1.1, 3.0])
-with col_cf_a:
-    if st.button("Limpar seleções dos gráficos", use_container_width=True):
-        st.session_state["__chart_filters_by_chart"] = {}
-        st.session_state["__chart_nonce"] = st.session_state.get("__chart_nonce", 0) + 1
-        st.rerun()
-with col_cf_b:
-    aviso = "Clique nos gráficos para aplicar filtros acumulativos. Para remover tudo, use o botão ao lado."
-    if not HAS_PLOTLY_EVENTS:
-        aviso += " Se o clique não responder, instale streamlit-plotly-events para ativar clique real nos gráficos."
-    st.caption(aviso)
-    show_active_chart_filters(filters_by_chart)
 
 
 def calcular_indicador(nome):
