@@ -743,6 +743,7 @@ def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFra
 # --------------------------------------------------------------------
 
 
+
 def build_filters(df: pd.DataFrame):
     if df is None:
         st.error("Dataset não carregado.")
@@ -750,7 +751,13 @@ def build_filters(df: pd.DataFrame):
 
     st.sidebar.header("Filtros")
 
-    def _multiselect_com_todos(titulo: str, opcoes: list, key: str, default=None, help_text: str | None = None):
+    def _multiselect_com_todos(
+        titulo: str,
+        opcoes: list,
+        key: str,
+        default=None,
+        help_text: str | None = None,
+    ):
         all_token = "Selecionar todos"
         prev_key = f"__prev_{key}"
 
@@ -767,6 +774,21 @@ def build_filters(df: pd.DataFrame):
 
         if prev_key not in st.session_state:
             st.session_state[prev_key] = st.session_state.get(key, []).copy()
+
+        valid_options = [all_token] + opcoes
+        curr_safe = [x for x in st.session_state.get(key, []) if x in valid_options]
+        prev_safe = [x for x in st.session_state.get(prev_key, []) if x in valid_options]
+        st.session_state[key] = curr_safe
+        st.session_state[prev_key] = prev_safe
+
+        if len(opcoes) > 0:
+            curr_wo = [x for x in st.session_state.get(key, []) if x != all_token]
+            if not curr_wo:
+                st.session_state[key] = [all_token] + opcoes
+            elif set(curr_wo) == set(opcoes):
+                st.session_state[key] = [all_token] + opcoes
+        else:
+            st.session_state[key] = []
 
         def _on_change():
             prev = st.session_state.get(prev_key, [])
@@ -790,16 +812,9 @@ def build_filters(df: pd.DataFrame):
 
         with st.sidebar.container(border=True):
             st.markdown(f"**{titulo}**")
-
-            valid_options = [all_token] + opcoes
-            curr_safe = [x for x in st.session_state.get(key, []) if x in valid_options]
-            prev_safe = [x for x in st.session_state.get(prev_key, []) if x in valid_options]
-            st.session_state[key] = curr_safe
-            st.session_state[prev_key] = prev_safe
-
             st.multiselect(
                 titulo,
-                options=[all_token] + opcoes,
+                options=valid_options,
                 default=st.session_state.get(key, []),
                 key=key,
                 on_change=_on_change,
@@ -843,12 +858,51 @@ def build_filters(df: pd.DataFrame):
         (c for c in df.columns if c.lower() in ["estado_residencia", "uf_residencia", "uf", "estado", "sigla_uf"]),
         None,
     )
+    regiao_col = next(
+        (c for c in df.columns if "regiao" in c.lower() and "saud" in c.lower()),
+        None,
+    )
+    cidade_col = "cidade_moradia" if "cidade_moradia" in df.columns else None
+    sexo_col = "sexo" if "sexo" in df.columns else None
+
+    def _current_sel(key: str) -> list[str]:
+        return [str(x) for x in st.session_state.get(key, []) if str(x) != "Selecionar todos"]
+
+    def _df_for_options(exclude: str | None = None) -> pd.DataFrame:
+        df_opt = df.copy()
+
+        if "data_internacao" in df_opt.columns and periodo_sel:
+            ini, fim = periodo_sel
+            ini = pd.to_datetime(ini)
+            fim = pd.to_datetime(fim) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+            df_opt = df_opt[(df_opt["data_internacao"] >= ini) & (df_opt["data_internacao"] <= fim)]
+
+        if "idade" in df_opt.columns and idade_sel:
+            df_opt = df_opt[(df_opt["idade"] >= idade_sel[0]) & (df_opt["idade"] <= idade_sel[1])]
+
+        estados_atuais = _current_sel("ms_estados")
+        regioes_atuais = _current_sel("ms_regioes")
+        cidades_atuais = _current_sel("ms_cidades")
+        sexos_atuais = _current_sel("ms_sexos")
+
+        if exclude != "estado" and estado_col and estados_atuais:
+            df_opt = df_opt[df_opt[estado_col].astype(str).isin(estados_atuais)]
+
+        if exclude != "regiao" and regiao_col and regioes_atuais:
+            df_opt = df_opt[df_opt[regiao_col].astype(str).isin(regioes_atuais)]
+
+        if exclude != "cidade" and cidade_col and cidades_atuais:
+            df_opt = df_opt[df_opt[cidade_col].astype(str).isin(cidades_atuais)]
+
+        if exclude != "sexo" and sexo_col and sexos_atuais:
+            df_opt = df_opt[df_opt[sexo_col].astype(str).isin(sexos_atuais)]
+
+        return df_opt
 
     estados_sel = []
-    df_estado = df
-
     if estado_col:
-        estados = sorted(df[estado_col].dropna().astype(str).unique().tolist())
+        df_opts_estado = _df_for_options(exclude="estado")
+        estados = sorted(df_opts_estado[estado_col].dropna().astype(str).unique().tolist())
         estados_sel = _multiselect_com_todos(
             "Estado de residência",
             estados,
@@ -856,17 +910,10 @@ def build_filters(df: pd.DataFrame):
             default=estados,
         )
 
-        if estados_sel:
-            df_estado = df[df[estado_col].isin(estados_sel)]
-
-    regiao_col = next(
-        (c for c in df.columns if "regiao" in c.lower() and "saud" in c.lower()),
-        None,
-    )
-
     regioes_sel = []
-    if regiao_col and df_estado is not None and not df_estado.empty:
-        regioes = sorted(df_estado[regiao_col].dropna().astype(str).unique().tolist())
+    if regiao_col:
+        df_opts_regiao = _df_for_options(exclude="regiao")
+        regioes = sorted(df_opts_regiao[regiao_col].dropna().astype(str).unique().tolist())
         regioes_sel = _multiselect_com_todos(
             "Região de saúde",
             regioes,
@@ -874,26 +921,21 @@ def build_filters(df: pd.DataFrame):
             default=regioes,
         )
 
-    cidade_col = "cidade_moradia" if "cidade_moradia" in df.columns else None
     cidades_sel = []
-
-    df_cidade_base = df_estado
-    if regiao_col and regioes_sel and df_cidade_base is not None and not df_cidade_base.empty:
-        df_cidade_base = df_cidade_base[df_cidade_base[regiao_col].isin(regioes_sel)]
-
-    if cidade_col and df_cidade_base is not None and not df_cidade_base.empty:
-        cidade_vals = sorted(df_cidade_base[cidade_col].dropna().astype(str).unique().tolist())
-        default_cidades = cidade_vals if len(cidade_vals) <= 25 else cidade_vals[:25]
+    if cidade_col:
+        df_opts_cidade = _df_for_options(exclude="cidade")
+        cidade_vals = sorted(df_opts_cidade[cidade_col].dropna().astype(str).unique().tolist())
         cidades_sel = _multiselect_com_todos(
             "Município de residência",
             cidade_vals,
             key="ms_cidades",
-            default=default_cidades,
+            default=cidade_vals,
         )
 
     sexo_sel = []
-    if "sexo" in df.columns:
-        sexos = sorted(df["sexo"].dropna().astype(str).unique().tolist())
+    if sexo_col:
+        df_opts_sexo = _df_for_options(exclude="sexo")
+        sexos = sorted(df_opts_sexo[sexo_col].dropna().astype(str).unique().tolist())
         sexo_sel = _multiselect_com_todos(
             "Sexo",
             sexos,
