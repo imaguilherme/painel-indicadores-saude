@@ -1106,6 +1106,62 @@ def show_chart_cross_filters():
             st.rerun()
 
 
+
+
+def _set_chart_filter(chart_key: str, selected: dict[str, list[str]]):
+    selected = {k: sorted({_norm_chart_value(v) for v in vals if v is not None}) for k, vals in selected.items() if vals}
+    if selected:
+        st.session_state["chart_cross_filters"][chart_key] = selected
+    else:
+        st.session_state["chart_cross_filters"].pop(chart_key, None)
+
+
+def render_chart_filter_controls(chart_key: str, dims: list[str], source_df: pd.DataFrame, title: str | None = None):
+    if source_df is None or source_df.empty:
+        return
+
+    box = st.container()
+    with box:
+        cols = st.columns([max(len(dims), 1), 1]) if len(dims) == 1 else st.columns(len(dims) + 1)
+        current = st.session_state.get("chart_cross_filters", {}).get(chart_key, {})
+        pending = {}
+        changed = False
+
+        for i, dim in enumerate(dims):
+            if dim not in source_df.columns:
+                continue
+            values = source_df[dim].drop_duplicates()
+            values = values.map(_norm_chart_value)
+            values = sorted([v for v in values.tolist() if v is not None])
+            if not values:
+                continue
+            label = CHART_FILTER_LABELS.get(dim, dim)
+            key = f"chart_filter_ui__{chart_key}__{dim}"
+            default_vals = [v for v in current.get(dim, []) if v in values]
+            new_vals = cols[i].multiselect(
+                f"Filtrar {label.lower()}",
+                options=values,
+                default=default_vals,
+                format_func=_display_chart_value,
+                key=key,
+                placeholder="Selecione",
+            )
+            pending[dim] = new_vals
+            if sorted(default_vals) != sorted(new_vals):
+                changed = True
+
+        if cols[-1].button("Limpar", key=f"clear_{chart_key}", use_container_width=True):
+            st.session_state["chart_cross_filters"].pop(chart_key, None)
+            for dim in dims:
+                k = f"chart_filter_ui__{chart_key}__{dim}"
+                if k in st.session_state:
+                    st.session_state[k] = []
+            st.rerun()
+
+        if changed:
+            _set_chart_filter(chart_key, pending)
+            st.rerun()
+
 def render_selectable_plotly(fig, chart_key: str, dims: list[str], config=None, use_container_width=True):
     fig.update_layout(
         clickmode="event+select",
@@ -1582,6 +1638,7 @@ with col_esq:
             custom_data=["sexo"],
         )
         render_selectable_plotly(fig, "sexo_card", ["sexo"], config={"displayModeBar": False})
+        render_chart_filter_controls("sexo_card", ["sexo"], base_charts)
     else:
         st.info("Coluna 'sexo' não encontrada.")
 
@@ -1622,6 +1679,7 @@ with col_esq:
             margin=dict(t=40, b=40),
         )
         render_selectable_plotly(fig, "etnia_sexo", ["etnia", "sexo"], config={"displayModeBar": True})
+        render_chart_filter_controls("etnia_sexo", ["etnia", "sexo"], base_charts)
     else:
         st.info("Requer colunas 'etnia' e 'sexo'.")
 
@@ -1696,6 +1754,7 @@ with col_esq:
         )
 
         render_selectable_plotly(fig, "faixa_sexo", ["faixa_etaria", "sexo"])
+        render_chart_filter_controls("faixa_sexo", ["faixa_etaria", "sexo"], base_charts)
     else:
         st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
 
@@ -1735,6 +1794,7 @@ with col_meio:
             custom_data=[carater_col],
         )
         render_selectable_plotly(fig, "carater", [carater_col], config={"displayModeBar": False})
+        render_chart_filter_controls("carater", [carater_col], base_charts)
     else:
         st.info("Coluna de caráter não encontrada.")
 
@@ -1766,6 +1826,7 @@ with col_meio:
             margin=dict(t=40, b=40),
         )
         render_selectable_plotly(fig, "procedimentos", [pcol])
+        render_chart_filter_controls("procedimentos", [pcol], base_charts)
     else:
         st.info("Não encontrei coluna de procedimento agregada.")
 
@@ -1793,7 +1854,8 @@ with col_meio:
             height=260,
             margin=dict(t=40, b=40),
         )
-        render_selectable_plotly(fig, "cid_grupo", ["cid_grupo"])
+        render_selectable_plotly(fig, "cid_grupo", ["cid_grupo"],)
+        render_chart_filter_controls("cid_grupo", ["cid_grupo"], base_charts)
     else:
         cid_candidates = []
         for c in base_charts.columns:
@@ -1824,6 +1886,7 @@ with col_meio:
                 margin=dict(t=40, b=40),
             )
             render_selectable_plotly(fig, "cid_detalhe", [col_cid])
+            render_chart_filter_controls("cid_detalhe", [col_cid], base_charts)
         else:
             st.info("Não encontrei nenhuma coluna de CID ou diagnóstico no dataset.")
 
@@ -1862,6 +1925,7 @@ with col_meio:
         )
         fig.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
         render_selectable_plotly(fig, "geo", ["uf", "regiao_saude", "cidade_moradia"])
+        render_chart_filter_controls("geo", ["uf", "regiao_saude", "cidade_moradia"], base_charts)
 
     else:
         st.info("Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis.")
