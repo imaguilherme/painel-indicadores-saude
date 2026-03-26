@@ -1019,28 +1019,47 @@ def _event_points(event):
     return pts or []
 
 
+def _point_get(pt, key, default=None):
+    if isinstance(pt, dict):
+        return pt.get(key, default)
+    return getattr(pt, key, default)
+
+
 def update_chart_filter_from_event(chart_key: str, event, dims: list[str]):
     pts = _event_points(event)
+
+    # seleção vazia limpa apenas o gráfico atual
+    if event is not None and not pts:
+        st.session_state["chart_cross_filters"].pop(chart_key, None)
+        return
+
     if not pts:
         return
 
     selected = {dim: set() for dim in dims}
     for pt in pts:
-        customdata = None
-        if isinstance(pt, dict):
-            customdata = pt.get("customdata")
-        else:
-            customdata = getattr(pt, "customdata", None)
+        customdata = _point_get(pt, "customdata")
+        label = _point_get(pt, "label")
+        x = _point_get(pt, "x")
+        y = _point_get(pt, "y")
 
-        if customdata is None:
-            continue
-
-        if not isinstance(customdata, (list, tuple)):
+        if customdata is not None and not isinstance(customdata, (list, tuple)):
             customdata = [customdata]
 
         for idx, dim in enumerate(dims):
-            if idx < len(customdata):
-                selected[dim].add(_norm_chart_value(customdata[idx]))
+            val = None
+            if customdata is not None and idx < len(customdata):
+                val = customdata[idx]
+            elif len(dims) == 1:
+                # fallback para barras e treemap quando customdata não vier no evento
+                val = label if label is not None else (y if y not in [None, ""] else x)
+            elif idx == 0:
+                val = y if y not in [None, ""] else label
+            elif idx == 1:
+                val = x if x not in [None, ""] else label
+
+            if val is not None:
+                selected[dim].add(_norm_chart_value(val))
 
     selected = {dim: sorted(vals) for dim, vals in selected.items() if vals}
     if selected:
@@ -1083,14 +1102,18 @@ def show_chart_cross_filters():
 
 
 def render_selectable_plotly(fig, chart_key: str, dims: list[str], config=None, use_container_width=True):
-    fig.update_layout(clickmode="event+select")
+    fig.update_layout(
+        clickmode="event+select",
+        dragmode="select",
+        selectdirection="any",
+    )
     event = st.plotly_chart(
         fig,
         use_container_width=use_container_width,
         config=config or {"displayModeBar": False},
         key=f"plot_{chart_key}",
         on_select="rerun",
-        selection_mode="points",
+        selection_mode=("points", "box", "lasso"),
     )
     update_chart_filter_from_event(chart_key, event, dims)
 
@@ -1156,6 +1179,7 @@ pacientes_base_count = (
 
 show_active_filters(f)
 show_chart_cross_filters()
+st.caption("Para filtrar cruzado, clique em um item do gráfico ou arraste uma seleção sobre os pontos/barras. As seleções ficam acumuladas até limpar.")
 st.divider()
 
 modo_perfil = True
