@@ -6,6 +6,11 @@ import plotly.graph_objects as go
 import duckdb
 import os
 
+try:
+    from streamlit_plotly_events import plotly_events
+except Exception:
+    plotly_events = None
+
 st.set_page_config(page_title="Perfil dos Pacientes", layout="wide")
 
 # --------------------------------------------------------------------
@@ -1107,14 +1112,39 @@ def render_selectable_plotly(fig, chart_key: str, dims: list[str], config=None, 
         dragmode="select",
         selectdirection="any",
     )
-    event = st.plotly_chart(
-        fig,
-        use_container_width=use_container_width,
-        config=config or {"displayModeBar": False},
-        key=f"plot_{chart_key}",
-        on_select="rerun",
-        selection_mode=("points", "box", "lasso"),
-    )
+
+    cfg = {"displayModeBar": True, "responsive": True}
+    if config:
+        cfg.update(config)
+
+    event = None
+
+    # Preferência por captura de clique real quando a biblioteca estiver disponível
+    if plotly_events is not None:
+        try:
+            event = plotly_events(
+                fig,
+                click_event=True,
+                select_event=True,
+                hover_event=False,
+                override_height=None,
+                override_width="100%" if use_container_width else None,
+                key=f"plotly_events_{chart_key}",
+            )
+        except Exception:
+            event = None
+
+    # Fallback para seleção nativa do Streamlit
+    if plotly_events is None or event is None:
+        event = st.plotly_chart(
+            fig,
+            use_container_width=use_container_width,
+            config=cfg,
+            key=f"plot_{chart_key}",
+            on_select="rerun",
+            selection_mode=("points", "box", "lasso"),
+        )
+
     update_chart_filter_from_event(chart_key, event, dims)
 
 
@@ -1179,7 +1209,9 @@ pacientes_base_count = (
 
 show_active_filters(f)
 show_chart_cross_filters()
-st.caption("Para filtrar cruzado, clique em um item do gráfico ou arraste uma seleção sobre os pontos/barras. As seleções ficam acumuladas até limpar.")
+st.caption("Para filtrar cruzado, clique em uma barra/área do gráfico. Se o seu ambiente não capturar clique simples, arraste uma seleção. As seleções ficam acumuladas até limpar.")
+if plotly_events is None:
+    st.info("Clique simples pode não funcionar na sua instalação atual. Para clique real, instale a dependência opcional `streamlit-plotly-events`. Sem ela, o app usa a seleção nativa do Streamlit.")
 st.divider()
 
 modo_perfil = True
