@@ -6,6 +6,11 @@ import plotly.graph_objects as go
 import duckdb
 import os
 
+try:
+    from streamlit_plotly_events import plotly_events
+except Exception:
+    plotly_events = None
+
 st.set_page_config(page_title="Perfil dos Pacientes", layout="wide")
 
 # --------------------------------------------------------------------
@@ -743,7 +748,6 @@ def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFra
 # --------------------------------------------------------------------
 
 
-
 def build_filters(df: pd.DataFrame):
     if df is None:
         st.error("Dataset não carregado.")
@@ -751,13 +755,7 @@ def build_filters(df: pd.DataFrame):
 
     st.sidebar.header("Filtros")
 
-    def _multiselect_com_todos(
-        titulo: str,
-        opcoes: list,
-        key: str,
-        default=None,
-        help_text: str | None = None,
-    ):
+    def _multiselect_com_todos(titulo: str, opcoes: list, key: str, default=None, help_text: str | None = None):
         all_token = "Selecionar todos"
         prev_key = f"__prev_{key}"
 
@@ -774,21 +772,6 @@ def build_filters(df: pd.DataFrame):
 
         if prev_key not in st.session_state:
             st.session_state[prev_key] = st.session_state.get(key, []).copy()
-
-        valid_options = [all_token] + opcoes
-        curr_safe = [x for x in st.session_state.get(key, []) if x in valid_options]
-        prev_safe = [x for x in st.session_state.get(prev_key, []) if x in valid_options]
-        st.session_state[key] = curr_safe
-        st.session_state[prev_key] = prev_safe
-
-        if len(opcoes) > 0:
-            curr_wo = [x for x in st.session_state.get(key, []) if x != all_token]
-            if not curr_wo:
-                st.session_state[key] = [all_token] + opcoes
-            elif set(curr_wo) == set(opcoes):
-                st.session_state[key] = [all_token] + opcoes
-        else:
-            st.session_state[key] = []
 
         def _on_change():
             prev = st.session_state.get(prev_key, [])
@@ -812,9 +795,16 @@ def build_filters(df: pd.DataFrame):
 
         with st.sidebar.container(border=True):
             st.markdown(f"**{titulo}**")
+
+            valid_options = [all_token] + opcoes
+            curr_safe = [x for x in st.session_state.get(key, []) if x in valid_options]
+            prev_safe = [x for x in st.session_state.get(prev_key, []) if x in valid_options]
+            st.session_state[key] = curr_safe
+            st.session_state[prev_key] = prev_safe
+
             st.multiselect(
                 titulo,
-                options=valid_options,
+                options=[all_token] + opcoes,
                 default=st.session_state.get(key, []),
                 key=key,
                 on_change=_on_change,
@@ -858,51 +848,12 @@ def build_filters(df: pd.DataFrame):
         (c for c in df.columns if c.lower() in ["estado_residencia", "uf_residencia", "uf", "estado", "sigla_uf"]),
         None,
     )
-    regiao_col = next(
-        (c for c in df.columns if "regiao" in c.lower() and "saud" in c.lower()),
-        None,
-    )
-    cidade_col = "cidade_moradia" if "cidade_moradia" in df.columns else None
-    sexo_col = "sexo" if "sexo" in df.columns else None
-
-    def _current_sel(key: str) -> list[str]:
-        return [str(x) for x in st.session_state.get(key, []) if str(x) != "Selecionar todos"]
-
-    def _df_for_options(exclude: str | None = None) -> pd.DataFrame:
-        df_opt = df.copy()
-
-        if "data_internacao" in df_opt.columns and periodo_sel:
-            ini, fim = periodo_sel
-            ini = pd.to_datetime(ini)
-            fim = pd.to_datetime(fim) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-            df_opt = df_opt[(df_opt["data_internacao"] >= ini) & (df_opt["data_internacao"] <= fim)]
-
-        if "idade" in df_opt.columns and idade_sel:
-            df_opt = df_opt[(df_opt["idade"] >= idade_sel[0]) & (df_opt["idade"] <= idade_sel[1])]
-
-        estados_atuais = _current_sel("ms_estados")
-        regioes_atuais = _current_sel("ms_regioes")
-        cidades_atuais = _current_sel("ms_cidades")
-        sexos_atuais = _current_sel("ms_sexos")
-
-        if exclude != "estado" and estado_col and estados_atuais:
-            df_opt = df_opt[df_opt[estado_col].astype(str).isin(estados_atuais)]
-
-        if exclude != "regiao" and regiao_col and regioes_atuais:
-            df_opt = df_opt[df_opt[regiao_col].astype(str).isin(regioes_atuais)]
-
-        if exclude != "cidade" and cidade_col and cidades_atuais:
-            df_opt = df_opt[df_opt[cidade_col].astype(str).isin(cidades_atuais)]
-
-        if exclude != "sexo" and sexo_col and sexos_atuais:
-            df_opt = df_opt[df_opt[sexo_col].astype(str).isin(sexos_atuais)]
-
-        return df_opt
 
     estados_sel = []
+    df_estado = df
+
     if estado_col:
-        df_opts_estado = _df_for_options(exclude="estado")
-        estados = sorted(df_opts_estado[estado_col].dropna().astype(str).unique().tolist())
+        estados = sorted(df[estado_col].dropna().astype(str).unique().tolist())
         estados_sel = _multiselect_com_todos(
             "Estado de residência",
             estados,
@@ -910,10 +861,17 @@ def build_filters(df: pd.DataFrame):
             default=estados,
         )
 
+        if estados_sel:
+            df_estado = df[df[estado_col].isin(estados_sel)]
+
+    regiao_col = next(
+        (c for c in df.columns if "regiao" in c.lower() and "saud" in c.lower()),
+        None,
+    )
+
     regioes_sel = []
-    if regiao_col:
-        df_opts_regiao = _df_for_options(exclude="regiao")
-        regioes = sorted(df_opts_regiao[regiao_col].dropna().astype(str).unique().tolist())
+    if regiao_col and df_estado is not None and not df_estado.empty:
+        regioes = sorted(df_estado[regiao_col].dropna().astype(str).unique().tolist())
         regioes_sel = _multiselect_com_todos(
             "Região de saúde",
             regioes,
@@ -921,21 +879,26 @@ def build_filters(df: pd.DataFrame):
             default=regioes,
         )
 
+    cidade_col = "cidade_moradia" if "cidade_moradia" in df.columns else None
     cidades_sel = []
-    if cidade_col:
-        df_opts_cidade = _df_for_options(exclude="cidade")
-        cidade_vals = sorted(df_opts_cidade[cidade_col].dropna().astype(str).unique().tolist())
+
+    df_cidade_base = df_estado
+    if regiao_col and regioes_sel and df_cidade_base is not None and not df_cidade_base.empty:
+        df_cidade_base = df_cidade_base[df_cidade_base[regiao_col].isin(regioes_sel)]
+
+    if cidade_col and df_cidade_base is not None and not df_cidade_base.empty:
+        cidade_vals = sorted(df_cidade_base[cidade_col].dropna().astype(str).unique().tolist())
+        default_cidades = cidade_vals if len(cidade_vals) <= 25 else cidade_vals[:25]
         cidades_sel = _multiselect_com_todos(
             "Município de residência",
             cidade_vals,
             key="ms_cidades",
-            default=cidade_vals,
+            default=default_cidades,
         )
 
     sexo_sel = []
-    if sexo_col:
-        df_opts_sexo = _df_for_options(exclude="sexo")
-        sexos = sorted(df_opts_sexo[sexo_col].dropna().astype(str).unique().tolist())
+    if "sexo" in df.columns:
+        sexos = sorted(df["sexo"].dropna().astype(str).unique().tolist())
         sexo_sel = _multiselect_com_todos(
             "Sexo",
             sexos,
@@ -1006,6 +969,184 @@ def show_active_filters(f):
         st.markdown("**Filtros ativos:** nenhum filtro aplicado.")
 
 
+
+def _normalize_chart_value(v):
+    if pd.isna(v):
+        return None
+    return str(v).strip()
+
+
+def init_chart_filters():
+    if "chart_filters" not in st.session_state or not isinstance(st.session_state["chart_filters"], dict):
+        st.session_state["chart_filters"] = {}
+
+
+def set_chart_filter(chart_id: str, values: dict | None):
+    init_chart_filters()
+    current = st.session_state["chart_filters"].copy()
+
+    cleaned = {}
+    if values:
+        for col, val in values.items():
+            if val is None:
+                continue
+            sval = _normalize_chart_value(val)
+            if sval is not None and sval != "":
+                cleaned[col] = sval
+
+    old = current.get(chart_id)
+    if not cleaned:
+        if chart_id in current:
+            current.pop(chart_id, None)
+            st.session_state["chart_filters"] = current
+            return True
+        return False
+
+    if old == cleaned:
+        current.pop(chart_id, None)
+    else:
+        current[chart_id] = cleaned
+
+    changed = current != st.session_state["chart_filters"]
+    st.session_state["chart_filters"] = current
+    return changed
+
+
+def apply_chart_filters(df: pd.DataFrame, chart_filters: dict):
+    if df is None or df.empty or not chart_filters:
+        return df
+
+    out = df.copy()
+    for _, filt in chart_filters.items():
+        for col, val in filt.items():
+            if col not in out.columns:
+                continue
+            col_vals = out[col].astype("string").str.strip()
+            out = out[col_vals == str(val).strip()]
+            if out.empty:
+                return out
+    return out
+
+
+def _plotly_events_available():
+    return plotly_events is not None
+
+
+def render_interactive_plot(fig, chart_id: str, parse_event, *, use_container_width: bool = True, config=None):
+    if not _plotly_events_available():
+        st.plotly_chart(fig, use_container_width=use_container_width, config=config)
+        return
+
+    height = None
+    try:
+        height = int(fig.layout.height) if fig.layout.height else None
+    except Exception:
+        height = None
+
+    events = plotly_events(
+        fig,
+        click_event=True,
+        hover_event=False,
+        select_event=False,
+        override_height=height,
+        override_width="100%",
+        key=f"pev_{chart_id}",
+    )
+
+    if events:
+        payload = parse_event(events[0], fig) if parse_event else None
+        if set_chart_filter(chart_id, payload):
+            st.rerun()
+
+
+def parse_card_segment_event(cat_col: str):
+    def _parser(event, fig):
+        curve_idx = event.get("curveNumber")
+        if curve_idx is None:
+            return None
+        try:
+            trace = fig.data[curve_idx]
+            category = getattr(trace, "name", None)
+        except Exception:
+            return None
+
+        category = _normalize_chart_value(category)
+        if category is None:
+            return None
+        return {cat_col: category}
+
+    return _parser
+
+
+def parse_grouped_bar_event(row_col: str, trace_col: str):
+    def _parser(event, fig):
+        payload = {}
+        row_val = _normalize_chart_value(event.get("y"))
+        curve_idx = event.get("curveNumber")
+
+        trace_name = None
+        if curve_idx is not None:
+            try:
+                trace_name = getattr(fig.data[curve_idx], "name", None)
+            except Exception:
+                trace_name = None
+
+        trace_name = _normalize_chart_value(trace_name)
+
+        if row_val is not None:
+            payload[row_col] = row_val
+        if trace_name is not None:
+            payload[trace_col] = trace_name
+        return payload or None
+
+    return _parser
+
+
+def parse_horizontal_bar_event(cat_col: str):
+    def _parser(event, fig):
+        cat = _normalize_chart_value(event.get("y"))
+        if cat is None:
+            point_idx = event.get("pointNumber")
+            try:
+                cat = _normalize_chart_value(fig.data[0].y[point_idx])
+            except Exception:
+                cat = None
+        if cat is None:
+            return None
+        return {cat_col: cat}
+
+    return _parser
+
+
+def parse_treemap_geo_event(event, fig):
+    label = _normalize_chart_value(event.get("label"))
+    custom = event.get("customdata")
+
+    uf = reg = cidade = None
+    if isinstance(custom, (list, tuple)):
+        if len(custom) > 0:
+            uf = _normalize_chart_value(custom[0])
+        if len(custom) > 1:
+            reg = _normalize_chart_value(custom[1])
+        if len(custom) > 2:
+            cidade = _normalize_chart_value(custom[2])
+
+    if label:
+        if label.startswith("Mun:") and cidade:
+            return {"cidade_moradia": cidade}
+        if label.startswith("RS:"):
+            payload = {}
+            if uf:
+                payload["uf"] = uf
+            if reg:
+                payload["regiao_saude"] = reg
+            return payload or None
+        if label.startswith("UF:") and uf:
+            return {"uf": uf}
+
+    return None
+
+
 # --------------------------------------------------------------------
 # INTERFACE PRINCIPAL
 # --------------------------------------------------------------------
@@ -1051,9 +1192,23 @@ if df is None or df.empty:
     st.error("Dataset vazio ou não carregado corretamente.")
     st.stop()
 
+init_chart_filters()
+
 f = build_filters(df)
-df_f = apply_filters(df, f, include_period=True)
-df_base_f = apply_filters(df_base, f, include_period=False) if df_base is not None else None
+
+with st.sidebar:
+    st.button(
+        "Limpar filtros dos gráficos",
+        key="btn_clear_chart_filters",
+        use_container_width=True,
+        on_click=lambda: st.session_state.update({"chart_filters": {}}),
+    )
+
+df_f_sidebar = apply_filters(df, f, include_period=True)
+df_base_f_sidebar = apply_filters(df_base, f, include_period=False) if df_base is not None else None
+
+df_f = apply_chart_filters(df_f_sidebar, st.session_state.get("chart_filters", {}))
+df_base_f = apply_chart_filters(df_base_f_sidebar, st.session_state.get("chart_filters", {})) if df_base_f_sidebar is not None else None
 df_pac = pacientes_unicos(df_f)
 
 pacientes_base_count = (
@@ -1427,7 +1582,13 @@ with col_esq:
             color_map=sexo_color_map,
             height=90,
         )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        render_interactive_plot(
+            fig,
+            "sexo_card",
+            parse_card_segment_event("sexo"),
+            use_container_width=True,
+            config={"displayModeBar": False},
+        )
     else:
         st.info("Coluna 'sexo' não encontrada.")
 
@@ -1466,7 +1627,13 @@ with col_esq:
             height=350,
             margin=dict(t=40, b=40),
         )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+        render_interactive_plot(
+            fig,
+            "etnia_sexo",
+            parse_grouped_bar_event("etnia", "sexo"),
+            use_container_width=True,
+            config={"displayModeBar": True},
+        )
     else:
         st.info("Requer colunas 'etnia' e 'sexo'.")
 
@@ -1539,7 +1706,12 @@ with col_esq:
             showlegend=True,
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        render_interactive_plot(
+            fig,
+            "faixa_sexo",
+            parse_grouped_bar_event("faixa_etaria", "sexo"),
+            use_container_width=True,
+        )
     else:
         st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
 
@@ -1577,7 +1749,13 @@ with col_meio:
             colors=car_colors,
             height=90,
         )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        render_interactive_plot(
+            fig,
+            "carater_card",
+            parse_card_segment_event(carater_col),
+            use_container_width=True,
+            config={"displayModeBar": False},
+        )
     else:
         st.info("Coluna de caráter não encontrada.")
 
@@ -1607,7 +1785,12 @@ with col_meio:
             height=260,
             margin=dict(t=40, b=40),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        render_interactive_plot(
+            fig,
+            "procedimento_bar",
+            parse_horizontal_bar_event(pcol),
+            use_container_width=True,
+        )
     else:
         st.info("Não encontrei coluna de procedimento agregada.")
 
@@ -1634,7 +1817,12 @@ with col_meio:
             height=260,
             margin=dict(t=40, b=40),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        render_interactive_plot(
+            fig,
+            "cid_bar",
+            parse_horizontal_bar_event("cid_grupo"),
+            use_container_width=True,
+        )
     else:
         cid_candidates = []
         for c in base_charts.columns:
@@ -1663,7 +1851,12 @@ with col_meio:
                 height=260,
                 margin=dict(t=40, b=40),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            render_interactive_plot(
+                fig,
+                "cid_bar",
+                parse_horizontal_bar_event(col_cid),
+                use_container_width=True,
+            )
         else:
             st.info("Não encontrei nenhuma coluna de CID ou diagnóstico no dataset.")
 
@@ -1682,13 +1875,12 @@ with col_meio:
         df_geo_raw["regiao_saude"] = df_geo_raw["regiao_saude"].fillna("Sem região de saúde")
         df_geo_raw["cidade_moradia"] = df_geo_raw["cidade_moradia"].fillna("Sem município")
 
-        df_geo_raw["uf_lbl"] = "UF: " + df_geo_raw["uf"].astype(str)
-        df_geo_raw["regiao_lbl"] = "RS: " + df_geo_raw["regiao_saude"].astype(str)
-        df_geo_raw["cidade_lbl"] = "Mun: " + df_geo_raw["cidade_moradia"].astype(str)
-
         df_geo_plot = agrega_para_grafico(
-            df_geo_raw, ["uf_lbl", "regiao_lbl", "cidade_lbl"], indicador_selecionado
+            df_geo_raw, ["uf", "regiao_saude", "cidade_moradia"], indicador_selecionado
         )
+        df_geo_plot["uf_lbl"] = "UF: " + df_geo_plot["uf"].astype(str)
+        df_geo_plot["regiao_lbl"] = "RS: " + df_geo_plot["regiao_saude"].astype(str)
+        df_geo_plot["cidade_lbl"] = "Mun: " + df_geo_plot["cidade_moradia"].astype(str)
         df_geo_plot["valor"] = df_geo_plot["valor"].clip(lower=0)
         df_geo_plot["valor_plot"] = np.sqrt(df_geo_plot["valor"])
 
@@ -1696,9 +1888,15 @@ with col_meio:
             df_geo_plot,
             path=["uf_lbl", "regiao_lbl", "cidade_lbl"],
             values="valor_plot",
+            custom_data=["uf", "regiao_saude", "cidade_moradia"],
         )
         fig.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
-        st.plotly_chart(fig, use_container_width=True)
+        render_interactive_plot(
+            fig,
+            "geo_treemap",
+            parse_treemap_geo_event,
+            use_container_width=True,
+        )
     else:
         st.info("Colunas 'uf', 'regiao_saude' ou 'cidade_moradia' não disponíveis.")
 
