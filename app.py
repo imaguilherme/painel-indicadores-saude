@@ -6,11 +6,6 @@ import plotly.graph_objects as go
 import duckdb
 import os
 
-try:
-    from streamlit_plotly_events import plotly_events
-except Exception:
-    plotly_events = None
-
 st.set_page_config(page_title="Perfil dos Pacientes", layout="wide")
 
 # --------------------------------------------------------------------
@@ -969,6 +964,7 @@ def show_active_filters(f):
 
 
 
+
 def _normalize_chart_value(v):
     if pd.isna(v):
         return None
@@ -987,18 +983,17 @@ def set_chart_filter(chart_id: str, values: dict | None):
     cleaned = {}
     if values:
         for col, val in values.items():
-            if val is None:
-                continue
             sval = _normalize_chart_value(val)
-            if sval is not None and sval != "":
+            if sval:
                 cleaned[col] = sval
 
     old = current.get(chart_id)
     if not cleaned:
         if chart_id in current:
             current.pop(chart_id, None)
+            changed = current != st.session_state["chart_filters"]
             st.session_state["chart_filters"] = current
-            return True
+            return changed
         return False
 
     if old == cleaned:
@@ -1020,105 +1015,124 @@ def apply_chart_filters(df: pd.DataFrame, chart_filters: dict):
         for col, val in filt.items():
             if col not in out.columns:
                 continue
-            col_vals = out[col].astype("string").str.strip()
-            out = out[col_vals == str(val).strip()]
+            out = out[out[col].astype("string").str.strip() == str(val).strip()]
             if out.empty:
                 return out
     return out
 
 
-def _plotly_events_available():
-    return plotly_events is not None
+def _extract_selected_points(event):
+    if event is None:
+        return []
 
+    if isinstance(event, dict):
+        sel = event.get("selection") or {}
+        pts = sel.get("points") or []
+        if pts:
+            return pts
 
-def render_interactive_plot(fig, chart_id: str, parse_event, *, use_container_width: bool = True, config=None):
-    if not _plotly_events_available():
-        st.plotly_chart(fig, use_container_width=use_container_width, config=config)
-        return
-
-    height = None
     try:
-        height = int(fig.layout.height) if fig.layout.height else None
+        sel = getattr(event, "selection", None)
+        if sel is not None:
+            pts = getattr(sel, "points", None)
+            if pts:
+                return pts
     except Exception:
-        height = None
+        pass
 
-    events = plotly_events(
+    return []
+
+
+def _point_get(point, *keys):
+    if point is None:
+        return None
+    if isinstance(point, dict):
+        for k in keys:
+            if k in point:
+                return point[k]
+    else:
+        for k in keys:
+            if hasattr(point, k):
+                return getattr(point, k)
+    return None
+
+
+def render_interactive_plot(fig, chart_id: str, parse_points, *, use_container_width: bool = True, config=None):
+    event = st.plotly_chart(
         fig,
-        click_event=True,
-        hover_event=False,
-        select_event=False,
-        override_height=height,
-        key=f"pev_{chart_id}",
+        use_container_width=use_container_width,
+        config=config,
+        key=f"chart_{chart_id}",
+        on_select="rerun",
+        selection_mode=("points",),
     )
 
-    if events:
-        payload = parse_event(events[0], fig) if parse_event else None
+    points = _extract_selected_points(event)
+    if points:
+        payload = parse_points(points, fig) if parse_points else None
         if set_chart_filter(chart_id, payload):
             st.rerun()
 
 
 def parse_card_segment_event(cat_col: str):
-    def _parser(event, fig):
-        curve_idx = event.get("curveNumber")
+    def _parser(points, fig):
+        point = points[0]
+        curve_idx = _point_get(point, "curve_number", "curveNumber")
         if curve_idx is None:
             return None
         try:
-            trace = fig.data[curve_idx]
+            trace = fig.data[int(curve_idx)]
             category = getattr(trace, "name", None)
         except Exception:
             return None
-
         category = _normalize_chart_value(category)
-        if category is None:
-            return None
-        return {cat_col: category}
-
+        return {cat_col: category} if category else None
     return _parser
 
 
 def parse_grouped_bar_event(row_col: str, trace_col: str):
-    def _parser(event, fig):
+    def _parser(points, fig):
+        point = points[0]
         payload = {}
-        row_val = _normalize_chart_value(event.get("y"))
-        curve_idx = event.get("curveNumber")
 
-        trace_name = None
-        if curve_idx is not None:
-            try:
-                trace_name = getattr(fig.data[curve_idx], "name", None)
-            except Exception:
-                trace_name = None
+        custom = _point_get(point, "customdata", "customData")
+        if isinstance(custom, (list, tuple)) and len(custom) >= 2:
+            row_val = _normalize_chart_value(custom[0])
+            trace_val = _normalize_chart_value(custom[1])
+        else:
+            row_val = _normalize_chart_value(_point_get(point, "y"))
+            curve_idx = _point_get(point, "curve_number", "curveNumber")
+            trace_val = None
+            if curve_idx is not None:
+                try:
+                    trace_val = _normalize_chart_value(getattr(fig.data[int(curve_idx)], "name", None))
+                except Exception:
+                    trace_val = None
 
-        trace_name = _normalize_chart_value(trace_name)
-
-        if row_val is not None:
+        if row_val:
             payload[row_col] = row_val
-        if trace_name is not None:
-            payload[trace_col] = trace_name
+        if trace_val:
+            payload[trace_col] = trace_val
         return payload or None
-
     return _parser
 
 
 def parse_horizontal_bar_event(cat_col: str):
-    def _parser(event, fig):
-        cat = _normalize_chart_value(event.get("y"))
-        if cat is None:
-            point_idx = event.get("pointNumber")
-            try:
-                cat = _normalize_chart_value(fig.data[0].y[point_idx])
-            except Exception:
-                cat = None
-        if cat is None:
-            return None
-        return {cat_col: cat}
-
+    def _parser(points, fig):
+        point = points[0]
+        custom = _point_get(point, "customdata", "customData")
+        if isinstance(custom, (list, tuple)) and len(custom) >= 1:
+            cat = _normalize_chart_value(custom[0])
+        else:
+            cat = _normalize_chart_value(_point_get(point, "y"))
+        return {cat_col: cat} if cat else None
     return _parser
 
 
-def parse_treemap_geo_event(event, fig):
-    label = _normalize_chart_value(event.get("label"))
-    custom = event.get("customdata")
+def parse_treemap_geo_event(points, fig):
+    point = points[0]
+    label = _normalize_chart_value(_point_get(point, "label"))
+    custom = _point_get(point, "customdata", "customData")
 
     uf = reg = cidade = None
     if isinstance(custom, (list, tuple)):
@@ -1141,9 +1155,7 @@ def parse_treemap_geo_event(event, fig):
             return payload or None
         if label.startswith("UF:") and uf:
             return {"uf": uf}
-
     return None
-
 
 # --------------------------------------------------------------------
 # INTERFACE PRINCIPAL
@@ -1193,6 +1205,7 @@ if df is None or df.empty:
 init_chart_filters()
 
 f = build_filters(df)
+
 with st.sidebar:
     st.button(
         "Limpar filtros dos gráficos",
@@ -1200,6 +1213,10 @@ with st.sidebar:
         use_container_width=True,
         on_click=lambda: st.session_state.update({"chart_filters": {}}),
     )
+    if st.session_state.get("chart_filters"):
+        st.caption("Filtros aplicados pelos gráficos:")
+        for chart_id, payload in st.session_state["chart_filters"].items():
+            st.caption(f"• {chart_id}: " + ", ".join(f"{k}={v}" for k, v in payload.items()))
 
 df_f_sidebar = apply_filters(df, f, include_period=True)
 df_base_f_sidebar = apply_filters(df_base, f, include_period=False) if df_base is not None else None
@@ -1208,16 +1225,8 @@ df_f = apply_chart_filters(df_f_sidebar, st.session_state.get("chart_filters", {
 df_base_f = apply_chart_filters(df_base_f_sidebar, st.session_state.get("chart_filters", {})) if df_base_f_sidebar is not None else None
 df_pac = pacientes_unicos(df_f)
 
-with st.sidebar:
-    chart_filters = st.session_state.get("chart_filters", {})
-    if chart_filters:
-        st.caption("Filtros aplicados pelos gráficos")
-        for filtro in chart_filters.values():
-            texto = " · ".join([f"{k}: {v}" for k, v in filtro.items()])
-            st.caption(f"• {texto}")
-
 if df_f is None or df_f.empty:
-    st.warning("Nenhum dado encontrado com a combinação atual de filtros. Limpe alguns filtros laterais ou os filtros aplicados pelos gráficos.")
+    st.warning("Nenhum dado encontrado com os filtros atuais. Ajuste os filtros da barra lateral ou limpe os filtros dos gráficos.")
 
 pacientes_base_count = (
     df_base_f["prontuario_anonimo"].nunique()
@@ -1588,7 +1597,7 @@ with col_esq:
             cat_col="sexo",
             indicador=indicador_selecionado,
             color_map=sexo_color_map,
-            height=110,
+            height=90,
         )
         render_interactive_plot(
             fig,
@@ -1617,6 +1626,7 @@ with col_esq:
             barmode="group",
             orientation="h",
             text="valor_fmt",
+            custom_data=["etnia", "sexo"],
             color_discrete_map=sexo_color_map,
         )
 
@@ -1755,7 +1765,7 @@ with col_meio:
             cat_col=carater_col,
             indicador=indicador_selecionado,
             colors=car_colors,
-            height=110,
+            height=90,
         )
         render_interactive_plot(
             fig,
@@ -1785,6 +1795,7 @@ with col_meio:
             x="valor",
             orientation="h",
             text="valor",
+            custom_data=[pcol],
             color_discrete_sequence=["#4C72B0"],
         )
         fig.update_layout(
@@ -1817,6 +1828,7 @@ with col_meio:
             x="valor",
             orientation="h",
             text="valor",
+            custom_data=["cid_grupo"],
             color_discrete_sequence=["#55A868"],
         )
         fig.update_layout(
@@ -1851,6 +1863,7 @@ with col_meio:
                 x="valor",
                 orientation="h",
                 text="valor",
+                custom_data=[col_cid],
                 color_discrete_sequence=["#55A868"],
             )
             fig.update_layout(
