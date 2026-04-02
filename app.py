@@ -204,10 +204,6 @@ def df_from_duckdb(con, sql: str) -> pd.DataFrame:
     return con.execute(sql).df()
 
 
-def _drop_existing_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    return df.drop(columns=[c for c in columns if c in df.columns], errors="ignore")
-
-
 @st.cache_data
 def load_aux_tables():
     try:
@@ -398,13 +394,13 @@ def marcar_obito_periodo(df: pd.DataFrame) -> pd.DataFrame:
                 .groupby("codigo_internacao", as_index=False)["obito_no_periodo"]
                 .max()
             )
-            df = _drop_existing_columns(df, ["obito_no_periodo"])
             df = df.merge(aux, on="codigo_internacao", how="left")
         else:
             df["obito_no_periodo"] = e["obito_no_periodo"]
     else:
         df["obito_no_periodo"] = False
     return df
+
 
 def marcar_uti_flag(df: pd.DataFrame) -> pd.DataFrame:
     if "codigo_internacao" not in df.columns:
@@ -431,10 +427,10 @@ def marcar_uti_flag(df: pd.DataFrame) -> pd.DataFrame:
         .groupby("codigo_internacao", as_index=False)["uti_flag"]
         .max()
     )
-    df = _drop_existing_columns(df, ["uti_flag"])
     df = df.merge(aux, on="codigo_internacao", how="left")
     df["uti_flag"] = df["uti_flag"].fillna(False)
     return df
+
 
 def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -499,10 +495,10 @@ def marcar_mort_30d_proc(df: pd.DataFrame) -> pd.DataFrame:
     e["obito_30d_proc"] = e["delta"].between(0, 30, inclusive="both")
 
     aux = e[["codigo_internacao", "obito_30d_proc"]]
-    df = _drop_existing_columns(df, ["obito_30d_proc"])
     df = df.merge(aux, on="codigo_internacao", how="left")
     df["obito_30d_proc"] = df["obito_30d_proc"].fillna(False)
     return df
+
 
 def marcar_mort_30d_alta(df: pd.DataFrame) -> pd.DataFrame:
     if not {"data_alta", "data_obito", "codigo_internacao"}.issubset(df.columns):
@@ -519,10 +515,10 @@ def marcar_mort_30d_alta(df: pd.DataFrame) -> pd.DataFrame:
     e["obito_30d_alta"] = e["delta"].between(0, 30, inclusive="both")
 
     aux = e[["codigo_internacao", "obito_30d_alta"]]
-    df = _drop_existing_columns(df, ["obito_30d_alta"])
     df = df.merge(aux, on="codigo_internacao", how="left")
     df["obito_30d_alta"] = df["obito_30d_alta"].fillna(False)
     return df
+
 
 def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
     pacientes = (
@@ -702,19 +698,13 @@ def definir_base_para_indicador(indicador, df_f, df_pac):
     if indicador == "Quantidade de pacientes":
         return df_pac.copy()
 
-    if df_f is None:
-        return df_f
-
     if indicador == "Quantidade de internações":
-        if "codigo_internacao" in df_f.columns:
+        if df_f is not None and "codigo_internacao" in df_f.columns:
             return df_f.drop_duplicates(subset=["codigo_internacao"]).copy()
         return df_f.copy()
 
-    if indicador in indicadores_media or indicador in indicadores_percentual:
-        if "codigo_internacao" in df_f.columns:
-            return df_f.drop_duplicates(subset=["codigo_internacao"]).copy()
-
     return df_f.copy()
+
 
 def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFrame:
     df = df.copy()
@@ -723,10 +713,7 @@ def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFra
     if indicador in ["Quantidade de pacientes", "Quantidade de internações"]:
         df["peso"] = 1.0
     elif indicador == "Quantidade de procedimentos":
-        if "n_proced" in df.columns:
-            df["peso"] = pd.to_numeric(df["n_proced"], errors="coerce").fillna(0)
-        else:
-            df["peso"] = 0.0
+        df["peso"] = df.get("n_proced", 0).fillna(0)
     elif indicador == "Tempo médio de internação (dias)":
         if "dias_permanencia" in df.columns:
             df["peso"] = df["dias_permanencia"].clip(lower=0).fillna(0)
@@ -831,27 +818,21 @@ def build_filters(df: pd.DataFrame):
 
     periodo_sel = None
     if "data_internacao" in df.columns:
-        datas_validas = pd.to_datetime(df["data_internacao"], errors="coerce").dropna()
-        if not datas_validas.empty:
-            min_dt = datas_validas.min().date()
-            max_dt = datas_validas.max().date()
-            periodo_sel = st.sidebar.date_input(
-                "Período da internação",
-                value=(min_dt, max_dt),
-                format="DD/MM/YYYY",
-            )
+        min_dt = pd.to_datetime(df["data_internacao"]).min().date()
+        max_dt = pd.to_datetime(df["data_internacao"]).max().date()
+        periodo_sel = st.sidebar.date_input(
+            "Período da internação",
+            value=(min_dt, max_dt),
+            format="DD/MM/YYYY",
+        )
 
-            if not isinstance(periodo_sel, (list, tuple)):
-                periodo_sel = (periodo_sel, periodo_sel)
-        else:
-            st.sidebar.info("Coluna 'data_internacao' sem datas válidas para filtro de período.")
+        if not isinstance(periodo_sel, (list, tuple)):
+            periodo_sel = (periodo_sel, periodo_sel)
     else:
         st.sidebar.info("Coluna 'data_internacao' não encontrada para filtro de período.")
 
     if "idade" in df.columns and df["idade"].notna().any():
         idade_min, idade_max = int(np.nanmin(df["idade"])), int(np.nanmax(df["idade"]))
-        idade_min = max(0, idade_min)
-        idade_max = max(idade_min, idade_max)
     else:
         idade_min, idade_max = 0, 120
 
@@ -907,7 +888,7 @@ def build_filters(df: pd.DataFrame):
 
     if cidade_col and df_cidade_base is not None and not df_cidade_base.empty:
         cidade_vals = sorted(df_cidade_base[cidade_col].dropna().astype(str).unique().tolist())
-        default_cidades = cidade_vals
+        default_cidades = cidade_vals if len(cidade_vals) <= 25 else cidade_vals[:25]
         cidades_sel = _multiselect_com_todos(
             "Município de residência",
             cidade_vals,
@@ -1080,20 +1061,16 @@ def render_interactive_plot(fig, chart_id: str, parse_event, *, use_container_wi
 
 def parse_card_segment_event(cat_col: str):
     def _parser(event, fig):
-        category = _normalize_chart_value(event.get("y"))
-        if category is None:
-            category = _normalize_chart_value(event.get("label"))
+        curve_idx = event.get("curveNumber")
+        if curve_idx is None:
+            return None
+        try:
+            trace = fig.data[curve_idx]
+            category = getattr(trace, "name", None)
+        except Exception:
+            return None
 
-        if category is None:
-            curve_idx = event.get("curveNumber")
-            if curve_idx is not None:
-                try:
-                    trace = fig.data[curve_idx]
-                    category = getattr(trace, "name", None)
-                except Exception:
-                    category = None
-                category = _normalize_chart_value(category)
-
+        category = _normalize_chart_value(category)
         if category is None:
             return None
         return {cat_col: category}
@@ -1218,7 +1195,6 @@ if df is None or df.empty:
 init_chart_filters()
 
 f = build_filters(df)
-
 with st.sidebar:
     st.button(
         "Limpar filtros dos gráficos",
@@ -1240,7 +1216,6 @@ pacientes_base_count = (
     else np.nan
 )
 
-show_active_filters(f)
 st.divider()
 
 modo_perfil = True
@@ -1533,48 +1508,42 @@ def card_bar_fig(
         return go.Figure()
 
     df_plot = df_cat.copy()
-    df_plot[cat_col] = (
-        df_plot[cat_col]
-        .astype("string")
-        .fillna("Sem informação")
-        .replace({"": "Sem informação"})
-        .str.strip()
+    df_plot["dummy"] = "Total"
+    df_plot["text"] = (
+        df_plot[cat_col].astype(str).str.upper()
+        + "<br>"
+        + df_plot["valor"].apply(lambda v: format_val_for_card(indicador, v))
     )
-    df_plot["valor"] = pd.to_numeric(df_plot["valor"], errors="coerce").fillna(0)
-    df_plot = df_plot[df_plot["valor"] > 0].sort_values("valor", ascending=True)
 
-    if df_plot.empty:
-        return go.Figure()
-
+    bar_kwargs = {}
     if color_map is not None:
-        marker_colors = [color_map.get(str(v), "#4C72B0") for v in df_plot[cat_col]]
-    elif colors is not None and len(colors) == len(df_plot):
-        marker_colors = colors
-    else:
-        marker_colors = ["#4C72B0"] * len(df_plot)
+        bar_kwargs["color_discrete_map"] = color_map
+    elif colors is not None:
+        bar_kwargs["color_discrete_sequence"] = colors
 
-    df_plot["text"] = df_plot["valor"].apply(lambda v: format_val_for_card(indicador, v))
-
-    fig = go.Figure(
-        go.Bar(
-            y=df_plot[cat_col],
-            x=df_plot["valor"],
-            orientation="h",
-            marker_color=marker_colors,
-            text=df_plot["text"],
-            textposition="outside",
-            cliponaxis=False,
-            hovertemplate="%{y}<br>Valor: %{x:.2f}<extra></extra>",
-        )
+    fig = px.bar(
+        df_plot,
+        x="valor",
+        y="dummy",
+        color=cat_col,
+        orientation="h",
+        text="text",
+        **bar_kwargs,
     )
 
-    x_tickformat = ".2f" if indicador in (indicadores_percentual + indicadores_media) else None
+    fig.update_traces(
+        textposition="inside",
+        insidetextanchor="middle",
+        textfont=dict(color="white", size=11),
+        marker_line_width=0,
+    )
 
-    fig.update_yaxes(title="", automargin=True)
-    fig.update_xaxes(title=label_eixo_x(indicador), tickformat=x_tickformat)
+    fig.update_yaxes(visible=False)
+    fig.update_xaxes(visible=False)
+
     fig.update_layout(
-        height=max(height, 70 + 42 * len(df_plot)),
-        margin=dict(l=20, r=40, t=5, b=5),
+        height=height,
+        margin=dict(l=1, r=1, t=5, b=5),
         showlegend=False,
         plot_bgcolor="white",
         paper_bgcolor="white",
@@ -1600,11 +1569,7 @@ col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
 with col_esq:
     st.subheader("Sexo")
     if "sexo" in base_charts.columns:
-        base_sexo = base_charts.copy()
-        base_sexo["sexo"] = (
-            base_sexo["sexo"].astype("string").fillna("Sem informação").replace({"": "Sem informação"}).str.strip()
-        )
-        df_sexo = agrega_para_grafico(base_sexo, ["sexo"], indicador_selecionado)
+        df_sexo = agrega_para_grafico(base_charts, ["sexo"], indicador_selecionado)
         df_sexo = df_sexo.sort_values("valor", ascending=False)
 
         sexo_color_map = get_sexo_color_map(df_sexo["sexo"].unique())
@@ -1628,17 +1593,10 @@ with col_esq:
 
     st.subheader("Raça/Cor × Sexo")
     if {"etnia", "sexo"}.issubset(base_charts.columns):
-        base_etnia = base_charts.copy()
-        base_etnia["etnia"] = (
-            base_etnia["etnia"].astype("string").fillna("Sem informação").replace({"": "Sem informação"}).str.strip()
-        )
-        base_etnia["sexo"] = (
-            base_etnia["sexo"].astype("string").fillna("Sem informação").replace({"": "Sem informação"}).str.strip()
-        )
         df_etnia = agrega_para_grafico(
-            base_etnia, ["etnia", "sexo"], indicador_selecionado
+            base_charts, ["etnia", "sexo"], indicador_selecionado
         )
-        df_etnia["valor_fmt"] = df_etnia["valor"].map(lambda v: format_val_for_card(indicador_selecionado, v))
+        df_etnia["valor_fmt"] = df_etnia["valor"].round(2)
 
         sexo_color_map = get_sexo_color_map(df_etnia["sexo"].unique())
 
@@ -1654,9 +1612,8 @@ with col_esq:
         )
 
         fig.update_traces(
-            texttemplate="%{text}",
+            texttemplate="%{text:.2f}",
             textposition="outside",
-            cliponaxis=False,
         )
 
         fig.update_xaxes(
@@ -1667,7 +1624,7 @@ with col_esq:
 
         fig.update_layout(
             height=350,
-            margin=dict(l=70, r=30, t=40, b=40),
+            margin=dict(t=40, b=40),
         )
         render_interactive_plot(
             fig,
@@ -1769,15 +1726,7 @@ with col_meio:
             break
 
     if carater_col:
-        base_car = base_charts.copy()
-        base_car[carater_col] = (
-            base_car[carater_col]
-            .astype("string")
-            .fillna("Sem informação")
-            .replace({"": "Sem informação"})
-            .str.strip()
-        )
-        df_car = agrega_para_grafico(base_car, [carater_col], indicador_selecionado)
+        df_car = agrega_para_grafico(base_charts, [carater_col], indicador_selecionado)
         df_car = df_car.sort_values("valor", ascending=False)
 
         car_colors = []
@@ -1819,28 +1768,21 @@ with col_meio:
     ]
     if proc_cols:
         pcol = proc_cols[0]
-        proc_base = base_charts.copy()
-        proc_base[pcol] = (
-            proc_base[pcol].astype("string").fillna("Sem informação").replace({"": "Sem informação"}).str.strip()
-        )
-        top_proc = agrega_para_grafico(proc_base, [pcol], indicador_selecionado)
-        top_proc["valor_lbl"] = top_proc["valor"].map(lambda v: format_val_for_card(indicador_selecionado, v))
+        top_proc = agrega_para_grafico(base_charts, [pcol], indicador_selecionado)
         top_proc = top_proc.sort_values("valor", ascending=True).tail(10)
         fig = px.bar(
             top_proc,
             y=pcol,
             x="valor",
             orientation="h",
-            text="valor_lbl",
+            text="valor",
             color_discrete_sequence=["#4C72B0"],
-            hover_data={pcol: True, "valor": ':.2f', "valor_lbl": False},
         )
-        fig.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
         fig.update_layout(
             xaxis_title=label_eixo_x(indicador_selecionado),
             yaxis_title="",
-            height=320,
-            margin=dict(l=240, r=40, t=40, b=40),
+            height=260,
+            margin=dict(t=40, b=40),
         )
         render_interactive_plot(
             fig,
@@ -1856,30 +1798,23 @@ with col_meio:
     st.subheader("CID (capítulo / grupo)")
 
     if "cid_grupo" in base_charts.columns and base_charts["cid_grupo"].notna().any():
-        cid_base = base_charts.copy()
-        cid_base["cid_grupo"] = (
-            cid_base["cid_grupo"].astype("string").fillna("Sem informação").replace({"": "Sem informação"}).str.strip()
-        )
         top_cid_grp = agrega_para_grafico(
-            cid_base, ["cid_grupo"], indicador_selecionado
+            base_charts, ["cid_grupo"], indicador_selecionado
         )
-        top_cid_grp["valor_lbl"] = top_cid_grp["valor"].map(lambda v: format_val_for_card(indicador_selecionado, v))
         top_cid_grp = top_cid_grp.sort_values("valor", ascending=True).tail(10)
         fig = px.bar(
             top_cid_grp,
             y="cid_grupo",
             x="valor",
             orientation="h",
-            text="valor_lbl",
+            text="valor",
             color_discrete_sequence=["#55A868"],
-            hover_data={"cid_grupo": True, "valor": ':.2f', "valor_lbl": False},
         )
-        fig.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
         fig.update_layout(
             xaxis_title=label_eixo_x(indicador_selecionado),
             yaxis_title="",
-            height=320,
-            margin=dict(l=240, r=40, t=40, b=40),
+            height=260,
+            margin=dict(t=40, b=40),
         )
         render_interactive_plot(
             fig,
@@ -1898,29 +1833,22 @@ with col_meio:
 
         if cid_candidates:
             col_cid = cid_candidates[0]
-            cid_base2 = base_charts.copy()
-            cid_base2[col_cid] = (
-                cid_base2[col_cid].astype("string").fillna("Sem informação").replace({"": "Sem informação"}).str.strip()
-            )
-            top = agrega_para_grafico(cid_base2, [col_cid], indicador_selecionado)
+            top = agrega_para_grafico(base_charts, [col_cid], indicador_selecionado)
             top[col_cid] = top[col_cid].astype(str).str.upper().str[:60]
-            top["valor_lbl"] = top["valor"].map(lambda v: format_val_for_card(indicador_selecionado, v))
             top = top.sort_values("valor", ascending=True).tail(10)
             fig = px.bar(
                 top,
                 y=col_cid,
                 x="valor",
                 orientation="h",
-                text="valor_lbl",
+                text="valor",
                 color_discrete_sequence=["#55A868"],
-                hover_data={col_cid: True, "valor": ':.2f', "valor_lbl": False},
             )
-            fig.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
             fig.update_layout(
                 xaxis_title=label_eixo_x(indicador_selecionado),
                 yaxis_title="",
-                height=320,
-                margin=dict(l=240, r=40, t=40, b=40),
+                height=260,
+                margin=dict(t=40, b=40),
             )
             render_interactive_plot(
                 fig,
@@ -1946,12 +1874,13 @@ with col_meio:
         df_geo_raw["regiao_saude"] = df_geo_raw["regiao_saude"].fillna("Sem região de saúde")
         df_geo_raw["cidade_moradia"] = df_geo_raw["cidade_moradia"].fillna("Sem município")
 
+        df_geo_raw["uf_lbl"] = "UF: " + df_geo_raw["uf"].astype(str)
+        df_geo_raw["regiao_lbl"] = "RS: " + df_geo_raw["regiao_saude"].astype(str)
+        df_geo_raw["cidade_lbl"] = "Mun: " + df_geo_raw["cidade_moradia"].astype(str)
+
         df_geo_plot = agrega_para_grafico(
-            df_geo_raw, ["uf", "regiao_saude", "cidade_moradia"], indicador_selecionado
+            df_geo_raw, ["uf_lbl", "regiao_lbl", "cidade_lbl"], indicador_selecionado
         )
-        df_geo_plot["uf_lbl"] = "UF: " + df_geo_plot["uf"].astype(str)
-        df_geo_plot["regiao_lbl"] = "RS: " + df_geo_plot["regiao_saude"].astype(str)
-        df_geo_plot["cidade_lbl"] = "Mun: " + df_geo_plot["cidade_moradia"].astype(str)
         df_geo_plot["valor"] = df_geo_plot["valor"].clip(lower=0)
         df_geo_plot["valor_plot"] = np.sqrt(df_geo_plot["valor"])
 
