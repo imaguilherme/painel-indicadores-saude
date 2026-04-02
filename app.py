@@ -888,12 +888,11 @@ def build_filters(df: pd.DataFrame):
 
     if cidade_col and df_cidade_base is not None and not df_cidade_base.empty:
         cidade_vals = sorted(df_cidade_base[cidade_col].dropna().astype(str).unique().tolist())
-        default_cidades = cidade_vals if len(cidade_vals) <= 25 else cidade_vals[:25]
         cidades_sel = _multiselect_com_todos(
             "Município de residência",
             cidade_vals,
             key="ms_cidades",
-            default=default_cidades,
+            default=cidade_vals,
         )
 
     sexo_sel = []
@@ -1049,7 +1048,6 @@ def render_interactive_plot(fig, chart_id: str, parse_event, *, use_container_wi
         hover_event=False,
         select_event=False,
         override_height=height,
-        override_width="100%",
         key=f"pev_{chart_id}",
     )
 
@@ -1209,6 +1207,17 @@ df_base_f_sidebar = apply_filters(df_base, f, include_period=False) if df_base i
 df_f = apply_chart_filters(df_f_sidebar, st.session_state.get("chart_filters", {}))
 df_base_f = apply_chart_filters(df_base_f_sidebar, st.session_state.get("chart_filters", {})) if df_base_f_sidebar is not None else None
 df_pac = pacientes_unicos(df_f)
+
+with st.sidebar:
+    chart_filters = st.session_state.get("chart_filters", {})
+    if chart_filters:
+        st.caption("Filtros aplicados pelos gráficos")
+        for filtro in chart_filters.values():
+            texto = " · ".join([f"{k}: {v}" for k, v in filtro.items()])
+            st.caption(f"• {texto}")
+
+if df_f is None or df_f.empty:
+    st.warning("Nenhum dado encontrado com a combinação atual de filtros. Limpe alguns filtros laterais ou os filtros aplicados pelos gráficos.")
 
 pacientes_base_count = (
     df_base_f["prontuario_anonimo"].nunique()
@@ -1579,7 +1588,7 @@ with col_esq:
             cat_col="sexo",
             indicador=indicador_selecionado,
             color_map=sexo_color_map,
-            height=90,
+            height=110,
         )
         render_interactive_plot(
             fig,
@@ -1746,7 +1755,7 @@ with col_meio:
             cat_col=carater_col,
             indicador=indicador_selecionado,
             colors=car_colors,
-            height=90,
+            height=110,
         )
         render_interactive_plot(
             fig,
