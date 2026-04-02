@@ -204,6 +204,10 @@ def df_from_duckdb(con, sql: str) -> pd.DataFrame:
     return con.execute(sql).df()
 
 
+def _drop_existing_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    return df.drop(columns=[c for c in columns if c in df.columns], errors="ignore")
+
+
 @st.cache_data
 def load_aux_tables():
     try:
@@ -394,13 +398,13 @@ def marcar_obito_periodo(df: pd.DataFrame) -> pd.DataFrame:
                 .groupby("codigo_internacao", as_index=False)["obito_no_periodo"]
                 .max()
             )
+            df = _drop_existing_columns(df, ["obito_no_periodo"])
             df = df.merge(aux, on="codigo_internacao", how="left")
         else:
             df["obito_no_periodo"] = e["obito_no_periodo"]
     else:
         df["obito_no_periodo"] = False
     return df
-
 
 def marcar_uti_flag(df: pd.DataFrame) -> pd.DataFrame:
     if "codigo_internacao" not in df.columns:
@@ -427,10 +431,10 @@ def marcar_uti_flag(df: pd.DataFrame) -> pd.DataFrame:
         .groupby("codigo_internacao", as_index=False)["uti_flag"]
         .max()
     )
+    df = _drop_existing_columns(df, ["uti_flag"])
     df = df.merge(aux, on="codigo_internacao", how="left")
     df["uti_flag"] = df["uti_flag"].fillna(False)
     return df
-
 
 def marcar_reinternacoes(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -495,10 +499,10 @@ def marcar_mort_30d_proc(df: pd.DataFrame) -> pd.DataFrame:
     e["obito_30d_proc"] = e["delta"].between(0, 30, inclusive="both")
 
     aux = e[["codigo_internacao", "obito_30d_proc"]]
+    df = _drop_existing_columns(df, ["obito_30d_proc"])
     df = df.merge(aux, on="codigo_internacao", how="left")
     df["obito_30d_proc"] = df["obito_30d_proc"].fillna(False)
     return df
-
 
 def marcar_mort_30d_alta(df: pd.DataFrame) -> pd.DataFrame:
     if not {"data_alta", "data_obito", "codigo_internacao"}.issubset(df.columns):
@@ -515,10 +519,10 @@ def marcar_mort_30d_alta(df: pd.DataFrame) -> pd.DataFrame:
     e["obito_30d_alta"] = e["delta"].between(0, 30, inclusive="both")
 
     aux = e[["codigo_internacao", "obito_30d_alta"]]
+    df = _drop_existing_columns(df, ["obito_30d_alta"])
     df = df.merge(aux, on="codigo_internacao", how="left")
     df["obito_30d_alta"] = df["obito_30d_alta"].fillna(False)
     return df
-
 
 def kpis(df_eventos: pd.DataFrame, df_pacientes: pd.DataFrame):
     pacientes = (
@@ -698,13 +702,19 @@ def definir_base_para_indicador(indicador, df_f, df_pac):
     if indicador == "Quantidade de pacientes":
         return df_pac.copy()
 
+    if df_f is None:
+        return df_f
+
     if indicador == "Quantidade de internações":
-        if df_f is not None and "codigo_internacao" in df_f.columns:
+        if "codigo_internacao" in df_f.columns:
             return df_f.drop_duplicates(subset=["codigo_internacao"]).copy()
         return df_f.copy()
 
-    return df_f.copy()
+    if indicador in indicadores_media or indicador in indicadores_percentual:
+        if "codigo_internacao" in df_f.columns:
+            return df_f.drop_duplicates(subset=["codigo_internacao"]).copy()
 
+    return df_f.copy()
 
 def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFrame:
     df = df.copy()
@@ -713,7 +723,10 @@ def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFra
     if indicador in ["Quantidade de pacientes", "Quantidade de internações"]:
         df["peso"] = 1.0
     elif indicador == "Quantidade de procedimentos":
-        df["peso"] = df.get("n_proced", 0).fillna(0)
+        if "n_proced" in df.columns:
+            df["peso"] = pd.to_numeric(df["n_proced"], errors="coerce").fillna(0)
+        else:
+            df["peso"] = 0.0
     elif indicador == "Tempo médio de internação (dias)":
         if "dias_permanencia" in df.columns:
             df["peso"] = df["dias_permanencia"].clip(lower=0).fillna(0)
@@ -818,21 +831,27 @@ def build_filters(df: pd.DataFrame):
 
     periodo_sel = None
     if "data_internacao" in df.columns:
-        min_dt = pd.to_datetime(df["data_internacao"]).min().date()
-        max_dt = pd.to_datetime(df["data_internacao"]).max().date()
-        periodo_sel = st.sidebar.date_input(
-            "Período da internação",
-            value=(min_dt, max_dt),
-            format="DD/MM/YYYY",
-        )
+        datas_validas = pd.to_datetime(df["data_internacao"], errors="coerce").dropna()
+        if not datas_validas.empty:
+            min_dt = datas_validas.min().date()
+            max_dt = datas_validas.max().date()
+            periodo_sel = st.sidebar.date_input(
+                "Período da internação",
+                value=(min_dt, max_dt),
+                format="DD/MM/YYYY",
+            )
 
-        if not isinstance(periodo_sel, (list, tuple)):
-            periodo_sel = (periodo_sel, periodo_sel)
+            if not isinstance(periodo_sel, (list, tuple)):
+                periodo_sel = (periodo_sel, periodo_sel)
+        else:
+            st.sidebar.info("Coluna 'data_internacao' sem datas válidas para filtro de período.")
     else:
         st.sidebar.info("Coluna 'data_internacao' não encontrada para filtro de período.")
 
     if "idade" in df.columns and df["idade"].notna().any():
         idade_min, idade_max = int(np.nanmin(df["idade"])), int(np.nanmax(df["idade"]))
+        idade_min = max(0, idade_min)
+        idade_max = max(idade_min, idade_max)
     else:
         idade_min, idade_max = 0, 120
 
@@ -888,7 +907,7 @@ def build_filters(df: pd.DataFrame):
 
     if cidade_col and df_cidade_base is not None and not df_cidade_base.empty:
         cidade_vals = sorted(df_cidade_base[cidade_col].dropna().astype(str).unique().tolist())
-        default_cidades = cidade_vals if len(cidade_vals) <= 25 else cidade_vals[:25]
+        default_cidades = cidade_vals
         cidades_sel = _multiselect_com_todos(
             "Município de residência",
             cidade_vals,
@@ -1217,6 +1236,7 @@ pacientes_base_count = (
     else np.nan
 )
 
+show_active_filters(f)
 st.divider()
 
 modo_perfil = True
