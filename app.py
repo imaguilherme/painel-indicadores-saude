@@ -1080,16 +1080,20 @@ def render_interactive_plot(fig, chart_id: str, parse_event, *, use_container_wi
 
 def parse_card_segment_event(cat_col: str):
     def _parser(event, fig):
-        curve_idx = event.get("curveNumber")
-        if curve_idx is None:
-            return None
-        try:
-            trace = fig.data[curve_idx]
-            category = getattr(trace, "name", None)
-        except Exception:
-            return None
+        category = _normalize_chart_value(event.get("y"))
+        if category is None:
+            category = _normalize_chart_value(event.get("label"))
 
-        category = _normalize_chart_value(category)
+        if category is None:
+            curve_idx = event.get("curveNumber")
+            if curve_idx is not None:
+                try:
+                    trace = fig.data[curve_idx]
+                    category = getattr(trace, "name", None)
+                except Exception:
+                    category = None
+                category = _normalize_chart_value(category)
+
         if category is None:
             return None
         return {cat_col: category}
@@ -1529,42 +1533,48 @@ def card_bar_fig(
         return go.Figure()
 
     df_plot = df_cat.copy()
-    df_plot["dummy"] = "Total"
-    df_plot["text"] = (
-        df_plot[cat_col].astype(str).str.upper()
-        + "<br>"
-        + df_plot["valor"].apply(lambda v: format_val_for_card(indicador, v))
+    df_plot[cat_col] = (
+        df_plot[cat_col]
+        .astype("string")
+        .fillna("Sem informação")
+        .replace({"": "Sem informação"})
+        .str.strip()
     )
+    df_plot["valor"] = pd.to_numeric(df_plot["valor"], errors="coerce").fillna(0)
+    df_plot = df_plot[df_plot["valor"] > 0].sort_values("valor", ascending=True)
 
-    bar_kwargs = {}
+    if df_plot.empty:
+        return go.Figure()
+
     if color_map is not None:
-        bar_kwargs["color_discrete_map"] = color_map
-    elif colors is not None:
-        bar_kwargs["color_discrete_sequence"] = colors
+        marker_colors = [color_map.get(str(v), "#4C72B0") for v in df_plot[cat_col]]
+    elif colors is not None and len(colors) == len(df_plot):
+        marker_colors = colors
+    else:
+        marker_colors = ["#4C72B0"] * len(df_plot)
 
-    fig = px.bar(
-        df_plot,
-        x="valor",
-        y="dummy",
-        color=cat_col,
-        orientation="h",
-        text="text",
-        **bar_kwargs,
+    df_plot["text"] = df_plot["valor"].apply(lambda v: format_val_for_card(indicador, v))
+
+    fig = go.Figure(
+        go.Bar(
+            y=df_plot[cat_col],
+            x=df_plot["valor"],
+            orientation="h",
+            marker_color=marker_colors,
+            text=df_plot["text"],
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="%{y}<br>Valor: %{x:.2f}<extra></extra>",
+        )
     )
 
-    fig.update_traces(
-        textposition="inside",
-        insidetextanchor="middle",
-        textfont=dict(color="white", size=11),
-        marker_line_width=0,
-    )
+    x_tickformat = ".2f" if indicador in (indicadores_percentual + indicadores_media) else None
 
-    fig.update_yaxes(visible=False)
-    fig.update_xaxes(visible=False)
-
+    fig.update_yaxes(title="", automargin=True)
+    fig.update_xaxes(title=label_eixo_x(indicador), tickformat=x_tickformat)
     fig.update_layout(
-        height=height,
-        margin=dict(l=1, r=1, t=5, b=5),
+        height=max(height, 70 + 42 * len(df_plot)),
+        margin=dict(l=20, r=40, t=5, b=5),
         showlegend=False,
         plot_bgcolor="white",
         paper_bgcolor="white",
@@ -1590,7 +1600,11 @@ col_esq, col_meio, col_dir = st.columns([1.1, 1.3, 1.1])
 with col_esq:
     st.subheader("Sexo")
     if "sexo" in base_charts.columns:
-        df_sexo = agrega_para_grafico(base_charts, ["sexo"], indicador_selecionado)
+        base_sexo = base_charts.copy()
+        base_sexo["sexo"] = (
+            base_sexo["sexo"].astype("string").fillna("Sem informação").replace({"": "Sem informação"}).str.strip()
+        )
+        df_sexo = agrega_para_grafico(base_sexo, ["sexo"], indicador_selecionado)
         df_sexo = df_sexo.sort_values("valor", ascending=False)
 
         sexo_color_map = get_sexo_color_map(df_sexo["sexo"].unique())
@@ -1614,10 +1628,17 @@ with col_esq:
 
     st.subheader("Raça/Cor × Sexo")
     if {"etnia", "sexo"}.issubset(base_charts.columns):
-        df_etnia = agrega_para_grafico(
-            base_charts, ["etnia", "sexo"], indicador_selecionado
+        base_etnia = base_charts.copy()
+        base_etnia["etnia"] = (
+            base_etnia["etnia"].astype("string").fillna("Sem informação").replace({"": "Sem informação"}).str.strip()
         )
-        df_etnia["valor_fmt"] = df_etnia["valor"].round(2)
+        base_etnia["sexo"] = (
+            base_etnia["sexo"].astype("string").fillna("Sem informação").replace({"": "Sem informação"}).str.strip()
+        )
+        df_etnia = agrega_para_grafico(
+            base_etnia, ["etnia", "sexo"], indicador_selecionado
+        )
+        df_etnia["valor_fmt"] = df_etnia["valor"].map(lambda v: format_val_for_card(indicador_selecionado, v))
 
         sexo_color_map = get_sexo_color_map(df_etnia["sexo"].unique())
 
@@ -1633,8 +1654,9 @@ with col_esq:
         )
 
         fig.update_traces(
-            texttemplate="%{text:.2f}",
+            texttemplate="%{text}",
             textposition="outside",
+            cliponaxis=False,
         )
 
         fig.update_xaxes(
@@ -1645,7 +1667,7 @@ with col_esq:
 
         fig.update_layout(
             height=350,
-            margin=dict(t=40, b=40),
+            margin=dict(l=70, r=30, t=40, b=40),
         )
         render_interactive_plot(
             fig,
@@ -1747,7 +1769,15 @@ with col_meio:
             break
 
     if carater_col:
-        df_car = agrega_para_grafico(base_charts, [carater_col], indicador_selecionado)
+        base_car = base_charts.copy()
+        base_car[carater_col] = (
+            base_car[carater_col]
+            .astype("string")
+            .fillna("Sem informação")
+            .replace({"": "Sem informação"})
+            .str.strip()
+        )
+        df_car = agrega_para_grafico(base_car, [carater_col], indicador_selecionado)
         df_car = df_car.sort_values("valor", ascending=False)
 
         car_colors = []
@@ -1789,21 +1819,28 @@ with col_meio:
     ]
     if proc_cols:
         pcol = proc_cols[0]
-        top_proc = agrega_para_grafico(base_charts, [pcol], indicador_selecionado)
+        proc_base = base_charts.copy()
+        proc_base[pcol] = (
+            proc_base[pcol].astype("string").fillna("Sem informação").replace({"": "Sem informação"}).str.strip()
+        )
+        top_proc = agrega_para_grafico(proc_base, [pcol], indicador_selecionado)
+        top_proc["valor_lbl"] = top_proc["valor"].map(lambda v: format_val_for_card(indicador_selecionado, v))
         top_proc = top_proc.sort_values("valor", ascending=True).tail(10)
         fig = px.bar(
             top_proc,
             y=pcol,
             x="valor",
             orientation="h",
-            text="valor",
+            text="valor_lbl",
             color_discrete_sequence=["#4C72B0"],
+            hover_data={pcol: True, "valor": ':.2f', "valor_lbl": False},
         )
+        fig.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
         fig.update_layout(
             xaxis_title=label_eixo_x(indicador_selecionado),
             yaxis_title="",
-            height=260,
-            margin=dict(t=40, b=40),
+            height=320,
+            margin=dict(l=240, r=40, t=40, b=40),
         )
         render_interactive_plot(
             fig,
@@ -1819,23 +1856,30 @@ with col_meio:
     st.subheader("CID (capítulo / grupo)")
 
     if "cid_grupo" in base_charts.columns and base_charts["cid_grupo"].notna().any():
-        top_cid_grp = agrega_para_grafico(
-            base_charts, ["cid_grupo"], indicador_selecionado
+        cid_base = base_charts.copy()
+        cid_base["cid_grupo"] = (
+            cid_base["cid_grupo"].astype("string").fillna("Sem informação").replace({"": "Sem informação"}).str.strip()
         )
+        top_cid_grp = agrega_para_grafico(
+            cid_base, ["cid_grupo"], indicador_selecionado
+        )
+        top_cid_grp["valor_lbl"] = top_cid_grp["valor"].map(lambda v: format_val_for_card(indicador_selecionado, v))
         top_cid_grp = top_cid_grp.sort_values("valor", ascending=True).tail(10)
         fig = px.bar(
             top_cid_grp,
             y="cid_grupo",
             x="valor",
             orientation="h",
-            text="valor",
+            text="valor_lbl",
             color_discrete_sequence=["#55A868"],
+            hover_data={"cid_grupo": True, "valor": ':.2f', "valor_lbl": False},
         )
+        fig.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
         fig.update_layout(
             xaxis_title=label_eixo_x(indicador_selecionado),
             yaxis_title="",
-            height=260,
-            margin=dict(t=40, b=40),
+            height=320,
+            margin=dict(l=240, r=40, t=40, b=40),
         )
         render_interactive_plot(
             fig,
@@ -1854,22 +1898,29 @@ with col_meio:
 
         if cid_candidates:
             col_cid = cid_candidates[0]
-            top = agrega_para_grafico(base_charts, [col_cid], indicador_selecionado)
+            cid_base2 = base_charts.copy()
+            cid_base2[col_cid] = (
+                cid_base2[col_cid].astype("string").fillna("Sem informação").replace({"": "Sem informação"}).str.strip()
+            )
+            top = agrega_para_grafico(cid_base2, [col_cid], indicador_selecionado)
             top[col_cid] = top[col_cid].astype(str).str.upper().str[:60]
+            top["valor_lbl"] = top["valor"].map(lambda v: format_val_for_card(indicador_selecionado, v))
             top = top.sort_values("valor", ascending=True).tail(10)
             fig = px.bar(
                 top,
                 y=col_cid,
                 x="valor",
                 orientation="h",
-                text="valor",
+                text="valor_lbl",
                 color_discrete_sequence=["#55A868"],
+                hover_data={col_cid: True, "valor": ':.2f', "valor_lbl": False},
             )
+            fig.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
             fig.update_layout(
                 xaxis_title=label_eixo_x(indicador_selecionado),
                 yaxis_title="",
-                height=260,
-                margin=dict(t=40, b=40),
+                height=320,
+                margin=dict(l=240, r=40, t=40, b=40),
             )
             render_interactive_plot(
                 fig,
