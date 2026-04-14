@@ -789,11 +789,13 @@ def get_chart_filter(filter_name: str):
 
 
 def render_plotly_filter_chart(fig, key: str, filter_map: dict[str, str] | None = None, **kwargs):
+    fig.update_layout(clickmode="event+select", dragmode=False)
+
     event = st.plotly_chart(
         fig,
         key=key,
         on_select="rerun",
-        selection_mode=("points", "box", "lasso"),
+        selection_mode="points",
         **kwargs,
     )
 
