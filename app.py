@@ -788,7 +788,13 @@ def get_chart_filter(filter_name: str):
     return st.session_state["chart_filters"].get(filter_name, [])
 
 
-def render_plotly_filter_chart(fig, key: str, filter_map: dict[str, str] | None = None, **kwargs):
+def render_plotly_filter_chart(
+    fig,
+    key: str,
+    filter_map: dict[str, str] | None = None,
+    preserve_existing_on_empty: bool = True,
+    **kwargs,
+):
     fig.update_layout(clickmode="event+select", dragmode=False)
 
     event = st.plotly_chart(
@@ -803,6 +809,10 @@ def render_plotly_filter_chart(fig, key: str, filter_map: dict[str, str] | None 
         return event
 
     selections = event.selection.get("points", []) if event and getattr(event, "selection", None) else []
+
+    if not selections and preserve_existing_on_empty:
+        return event
+
     grouped = {k: [] for k in filter_map}
 
     for point in selections:
@@ -818,7 +828,9 @@ def render_plotly_filter_chart(fig, key: str, filter_map: dict[str, str] | None 
                     grouped[filter_name].append(str(val))
 
     for filter_name in filter_map:
-        update_chart_filter(filter_name, grouped.get(filter_name, []))
+        values = grouped.get(filter_name, [])
+        if values or not preserve_existing_on_empty:
+            update_chart_filter(filter_name, values)
 
     return event
 
