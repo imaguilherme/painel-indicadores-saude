@@ -738,6 +738,132 @@ def adicionar_peso_por_indicador(df: pd.DataFrame, indicador: str) -> pd.DataFra
     return df
 
 
+
+
+def init_chart_filter_state():
+    if "chart_filters" not in st.session_state:
+        st.session_state["chart_filters"] = {
+            "sexo": [],
+            "etnia": [],
+            "carater": [],
+            "procedimento": [],
+            "cid_grupo": [],
+            "faixa_etaria": [],
+            "ano": [],
+            "mes": [],
+        }
+
+
+def clear_chart_filters():
+    st.session_state["chart_filters"] = {
+        "sexo": [],
+        "etnia": [],
+        "carater": [],
+        "procedimento": [],
+        "cid_grupo": [],
+        "faixa_etaria": [],
+        "ano": [],
+        "mes": [],
+    }
+
+
+def _normalize_selected_values(values):
+    out = []
+    for v in values or []:
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def update_chart_filter(filter_name: str, values):
+    init_chart_filter_state()
+    st.session_state["chart_filters"][filter_name] = _normalize_selected_values(values)
+
+
+def get_chart_filter(filter_name: str):
+    init_chart_filter_state()
+    return st.session_state["chart_filters"].get(filter_name, [])
+
+
+def render_plotly_filter_chart(fig, key: str, filter_map: dict[str, str] | None = None, **kwargs):
+    event = st.plotly_chart(
+        fig,
+        key=key,
+        on_select="rerun",
+        selection_mode=("points", "box", "lasso"),
+        **kwargs,
+    )
+
+    if not filter_map:
+        return event
+
+    selections = event.selection.get("points", []) if event and getattr(event, "selection", None) else []
+    grouped = {k: [] for k in filter_map}
+
+    for point in selections:
+        custom = point.get("customdata")
+        if custom is None:
+            continue
+        if not isinstance(custom, (list, tuple)):
+            custom = [custom]
+        for idx, filter_name in enumerate(filter_map.keys()):
+            if idx < len(custom):
+                val = custom[idx]
+                if val is not None and str(val).strip() != "":
+                    grouped[filter_name].append(str(val))
+
+    for filter_name in filter_map:
+        update_chart_filter(filter_name, grouped.get(filter_name, []))
+
+    return event
+
+
+def apply_chart_filters(df: pd.DataFrame) -> pd.DataFrame:
+    init_chart_filter_state()
+    cf = st.session_state.get("chart_filters", {})
+    out = df.copy()
+
+    if cf.get("sexo") and "sexo" in out.columns:
+        out = out[out["sexo"].astype(str).isin(cf["sexo"])]
+
+    if cf.get("etnia") and "etnia" in out.columns:
+        out = out[out["etnia"].astype(str).isin(cf["etnia"])]
+
+    carater_col = next(
+        (c for c in out.columns if c in ["carater_atendimento", "caracter_atendimento", "carater", "natureza_agend"]),
+        None,
+    )
+    if cf.get("carater") and carater_col:
+        out = out[out[carater_col].astype(str).isin(cf["carater"])]
+
+    proc_col = next(
+        (c for c in out.columns if "proc_nome_prim" in c.lower() or c.lower() == "procedimento"),
+        None,
+    )
+    if cf.get("procedimento") and proc_col:
+        out = out[out[proc_col].astype(str).isin(cf["procedimento"])]
+
+    if cf.get("cid_grupo") and "cid_grupo" in out.columns:
+        out = out[out["cid_grupo"].astype(str).isin(cf["cid_grupo"])]
+
+    if cf.get("faixa_etaria") and "faixa_etaria" in out.columns:
+        out = out[out["faixa_etaria"].astype(str).isin(cf["faixa_etaria"])]
+
+    if cf.get("ano"):
+        ano_col = "ano_internacao" if "ano_internacao" in out.columns else ("ano" if "ano" in out.columns else None)
+        if ano_col:
+            out = out[out[ano_col].astype("Int64").astype(str).isin(cf["ano"])]
+
+    if cf.get("mes") and "data_internacao" in out.columns:
+        meses = out["data_internacao"].dt.to_period("M").astype(str)
+        out = out[meses.isin(cf["mes"])]
+
+    return out
+
+
 # --------------------------------------------------------------------
 # FILTROS
 # --------------------------------------------------------------------
@@ -969,6 +1095,7 @@ def show_active_filters(f):
 # --------------------------------------------------------------------
 
 st.title("Perfil dos Pacientes")
+init_chart_filter_state()
 
 # --------------------------------------------------------------------
 # CARREGAMENTO DIRETO DOS CSVs DA RAIZ DO PROJETO
@@ -1011,7 +1138,9 @@ if df is None or df.empty:
 
 f = build_filters(df)
 df_f = apply_filters(df, f, include_period=True)
+df_f = apply_chart_filters(df_f)
 df_base_f = apply_filters(df_base, f, include_period=False) if df_base is not None else None
+df_base_f = apply_chart_filters(df_base_f) if df_base_f is not None else None
 df_pac = pacientes_unicos(df_f)
 
 pacientes_base_count = (
@@ -1019,6 +1148,29 @@ pacientes_base_count = (
     if (df_base_f is not None and "prontuario_anonimo" in df_base_f.columns)
     else np.nan
 )
+
+if any(st.session_state.get("chart_filters", {}).values()):
+    with st.container(border=True):
+        st.markdown("**Filtros aplicados pelos gráficos**")
+        partes_chart = []
+        for k, vals in st.session_state.get("chart_filters", {}).items():
+            if vals:
+                nome = {
+                    "sexo": "Sexo",
+                    "etnia": "Raça/Cor",
+                    "carater": "Caráter",
+                    "procedimento": "Procedimento",
+                    "cid_grupo": "CID grupo",
+                    "faixa_etaria": "Faixa etária",
+                    "ano": "Ano",
+                    "mes": "Mês",
+                }.get(k, k)
+                partes_chart.append(f"**{nome}:** " + ", ".join(vals))
+        if partes_chart:
+            st.markdown(" | ".join(partes_chart))
+        if st.button("Limpar filtros dos gráficos"):
+            clear_chart_filters()
+            st.rerun()
 
 st.divider()
 
@@ -1385,7 +1537,14 @@ with col_esq:
             color_map=sexo_color_map,
             height=90,
         )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        fig.update_traces(customdata=np.array(df_sexo[["sexo"]], dtype=object))
+        render_plotly_filter_chart(
+            fig,
+            key="chart_sexo",
+            filter_map={"sexo": "sexo"},
+            use_container_width=True,
+            config={"displayModeBar": False},
+        )
     else:
         st.info("Coluna 'sexo' não encontrada.")
 
@@ -1424,7 +1583,14 @@ with col_esq:
             height=350,
             margin=dict(t=40, b=40),
         )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+        fig.update_traces(customdata=np.array(df_etnia[["etnia", "sexo"]], dtype=object))
+        render_plotly_filter_chart(
+            fig,
+            key="chart_etnia_sexo",
+            filter_map={"etnia": "etnia", "sexo": "sexo"},
+            use_container_width=True,
+            config={"displayModeBar": True},
+        )
     else:
         st.info("Requer colunas 'etnia' e 'sexo'.")
 
@@ -1474,6 +1640,7 @@ with col_esq:
                 marker_color=cor,
                 text=np.round(values, 2),
                 textposition="outside",
+                customdata=np.array([[str(faixa), str(sexo_cat)] for faixa in pivot.index], dtype=object),
             )
 
         max_abs = float(np.nanmax(np.abs(pivot.values))) if pivot.values.size > 0 else 0.0
@@ -1497,7 +1664,12 @@ with col_esq:
             showlegend=True,
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        render_plotly_filter_chart(
+            fig,
+            key="chart_piramide",
+            filter_map={"faixa_etaria": "faixa_etaria", "sexo": "sexo"},
+            use_container_width=True,
+        )
     else:
         st.info("Requer colunas 'faixa_etaria' e 'sexo'.")
 
@@ -1535,7 +1707,14 @@ with col_meio:
             colors=car_colors,
             height=90,
         )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        fig.update_traces(customdata=np.array(df_car[[carater_col]], dtype=object))
+        render_plotly_filter_chart(
+            fig,
+            key="chart_carater",
+            filter_map={"carater": carater_col},
+            use_container_width=True,
+            config={"displayModeBar": False},
+        )
     else:
         st.info("Coluna de caráter não encontrada.")
 
@@ -1565,7 +1744,13 @@ with col_meio:
             height=260,
             margin=dict(t=40, b=40),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        fig.update_traces(customdata=np.array(top_proc[[pcol]], dtype=object))
+        render_plotly_filter_chart(
+            fig,
+            key="chart_procedimentos",
+            filter_map={"procedimento": pcol},
+            use_container_width=True,
+        )
     else:
         st.info("Não encontrei coluna de procedimento agregada.")
 
@@ -1592,7 +1777,13 @@ with col_meio:
             height=260,
             margin=dict(t=40, b=40),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        fig.update_traces(customdata=np.array(top_cid_grp[["cid_grupo"]], dtype=object))
+        render_plotly_filter_chart(
+            fig,
+            key="chart_cid_grupo",
+            filter_map={"cid_grupo": "cid_grupo"},
+            use_container_width=True,
+        )
     else:
         cid_candidates = []
         for c in base_charts.columns:
@@ -1734,7 +1925,13 @@ if modo_comp == "Ano":
                     height=280,
                     margin=dict(t=40, b=40),
                 )
-                st.plotly_chart(fig_ano, use_container_width=True)
+                fig_ano.update_traces(customdata=np.array(df_plot[[ano_col]].astype("Int64").astype(str), dtype=object))
+                render_plotly_filter_chart(
+                    fig_ano,
+                    key="chart_temporal_ano",
+                    filter_map={"ano": ano_col},
+                    use_container_width=True,
+                )
             else:
                 st.info("Sem valores para o comparativo anual com o indicador selecionado.")
         else:
@@ -1777,7 +1974,14 @@ else:
                     height=280,
                     margin=dict(t=40, b=40),
                 )
-                st.plotly_chart(fig_mes, use_container_width=True)
+                df_plot["mes_periodo"] = pd.PeriodIndex(df_plot["mes"].str[3:] + "-" + df_plot["mes"].str[:2], freq="M").astype(str)
+                fig_mes.update_traces(customdata=np.array(df_plot[["mes_periodo"]], dtype=object))
+                render_plotly_filter_chart(
+                    fig_mes,
+                    key="chart_temporal_mes",
+                    filter_map={"mes": "mes_periodo"},
+                    use_container_width=True,
+                )
             else:
                 st.info("Sem valores para o comparativo mensal com o indicador selecionado.")
         else:
