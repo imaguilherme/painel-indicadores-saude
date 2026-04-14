@@ -809,30 +809,62 @@ def render_plotly_filter_chart(
         return event
 
     selections = event.selection.get("points", []) if event and getattr(event, "selection", None) else []
+    sig_key = f"__last_selection_sig__{key}"
 
-    if not selections and preserve_existing_on_empty:
+    def _signature(points):
+        out = []
+        for point in points or []:
+            custom = point.get("customdata")
+            if custom is None:
+                continue
+            if not isinstance(custom, (list, tuple)):
+                custom = [custom]
+            vals = tuple(str(v).strip() for v in custom if v is not None and str(v).strip() != "")
+            if vals:
+                out.append(vals)
+        return tuple(sorted(set(out)))
+
+    current_sig = _signature(selections)
+    last_sig = st.session_state.get(sig_key)
+
+    if not selections:
+        if not preserve_existing_on_empty:
+            for filter_name in filter_map:
+                update_chart_filter(filter_name, [])
+        st.session_state[sig_key] = None
+        return event
+
+    if current_sig == last_sig:
         return event
 
     grouped = {k: [] for k in filter_map}
-
-    for point in selections:
-        custom = point.get("customdata")
-        if custom is None:
-            continue
-        if not isinstance(custom, (list, tuple)):
-            custom = [custom]
+    for vals in current_sig:
         for idx, filter_name in enumerate(filter_map.keys()):
-            if idx < len(custom):
-                val = custom[idx]
-                if val is not None and str(val).strip() != "":
-                    grouped[filter_name].append(str(val))
+            if idx < len(vals):
+                grouped[filter_name].append(vals[idx])
+
+    single_click_toggle = len(current_sig) == 1
 
     for filter_name in filter_map:
-        values = grouped.get(filter_name, [])
-        if values or not preserve_existing_on_empty:
-            update_chart_filter(filter_name, values)
+        incoming = _normalize_selected_values(grouped.get(filter_name, []))
+        existing = _normalize_selected_values(get_chart_filter(filter_name))
 
-    return event
+        if single_click_toggle and len(incoming) == 1:
+            value = incoming[0]
+            if value in existing:
+                new_values = [v for v in existing if v != value]
+            else:
+                new_values = existing + [value]
+        else:
+            new_values = existing.copy()
+            for value in incoming:
+                if value not in new_values:
+                    new_values.append(value)
+
+        update_chart_filter(filter_name, new_values)
+
+    st.session_state[sig_key] = current_sig
+    st.rerun()
 
 
 def apply_chart_filters(df: pd.DataFrame) -> pd.DataFrame:
